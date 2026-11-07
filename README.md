@@ -1,6 +1,6 @@
-# Retail Analytics Pipeline | Google Sheets → Python → BigQuery → Power BI
+# EPT Analytics Pipeline | Google Sheets → Python → BigQuery → Power BI
 
-> **Projeto guiado, end-to-end, para portfólio de Engenharia e Análise de Dados.** Status: especificação inicial; implementação pendente. O esquema das planilhas deve ser descoberto e validado antes de executar as consultas ilustrativas.
+> **Projeto guiado, end-to-end, para portfólio de Engenharia e Análise de Dados.** Status: especificação inicial; implementação pendente. O inventário inicial está documentado; o contrato e as regras pendentes devem ser validados antes de executar as consultas ilustrativas.
 
 ## Sumário
 
@@ -17,31 +17,64 @@
 
 ### Contexto do negócio
 
-O projeto parte do cenário **didático de varejo omnichannel** descrito no material *Memória de contexto técnica — Curso Básico de Power BI 2026* (Hashtag Treinamentos): vendas anuais, clientes, lojas e produtos. A proposta é analisar faturamento, unidades vendidas, devoluções, clientes distintos, participação do canal online, evolução mensal e desempenho por marca e região.
+O projeto analisa o **ranking EPT de esports nas modalidades League of Legends (LoL) e Counter-Strike 2 (CS2)**: equipes, partidas, campeonatos, pontuação por tier e penalidade de inatividade.
 
-**Atenção ao escopo:** as duas URLs abaixo foram fornecidas como fontes, mas seu conteúdo, nomes de abas, cabeçalhos, volumes e permissões **não puderam ser verificados nesta especificação**. Os campos e as tabelas usados nos exemplos são um **contrato-alvo hipotético**, inspirado no documento do curso, e precisam ser mapeados para o esquema real na etapa de descoberta. Não se deve assumir que os links contêm necessariamente todas as tabelas do exercício.
+**Base de contexto:** [Análise técnica das planilhas EPT](Analise_Planilhas_EPT_para_README.md), com leitura registrada em **07/11/2026**. Contagens e fórmulas abaixo são observações dessa leitura, sujeitas a mudanças nas fontes; não representam nova inspeção das planilhas. Os exemplos usam um contrato normalizado proposto, ainda a implementar.
 
-- [Planilha de origem A](https://docs.google.com/spreadsheets/d/1kMau11VHrNjGijHWZ1ii0c_U2zcuCTUE_T04MReKjJE/edit?usp=sharing)
-- [Planilha de origem B](https://docs.google.com/spreadsheets/d/1ivLs5NDUxHZNU8cK8RRSIzfWVoGPKd2R6B9eah2elx8/edit?usp=sharing)
+- [EPT LoL — 29.12.26 (fonte A)](https://docs.google.com/spreadsheets/d/1kMau11VHrNjGijHWZ1ii0c_U2zcuCTUE_T04MReKjJE/edit?usp=sharing)
+- [EPT CS2 (fonte B)](https://docs.google.com/spreadsheets/d/1ivLs5NDUxHZNU8cK8RRSIzfWVoGPKd2R6B9eah2elx8/edit?usp=sharing)
+
+| Fonte | Abas | Papel |
+|---|---|---|
+| LoL | `PONTUAÇÃO LoL`, `PARTIDAS LOL`, `CAMPEONATOS` | Pontuação por equipe/evento, partidas e campeonatos |
+| CS2 | `PONTUAÇÃO CS2`, `PARTIDAS CS2`, `CAMPEONATOS` | Pontuação por equipe/evento, mapas/partidas e cadastro a validar |
+| Ambas | `PONTUAÇÃO TIER` | Dois blocos independentes: regras por partida e por colocação final |
+| LoL / CS2 | `EPT LoL` / `EPT CS2` e `SITE ABA RANKING` | Saídas derivadas para reconciliação; não carregar como fatos adicionais |
+
+Na leitura registrada, LoL tinha 224 linhas de pontuação (incluindo placeholder), 529 linhas de partidas com conteúdo e 34 campeonatos. CS2 tinha 199 linhas de pontuação após o cabeçalho, 185 nomes preenchidos e 184 únicos, 34 linhas de partidas com conteúdo e 22 campeonatos. Esses volumes são referência inicial, não limites fixos de extração.
 
 ### Objetivo técnico
 
-Implementar uma ingestão reproduzível via **Google Sheets API**, limpar e validar registros com Python, publicar dados tratados no **BigQuery**, modelar um **esquema estrela** e consumir o Data Mart no **Power BI**. Demonstrar testes, idempotência, logs, controle de erros, versionamento e documentação.
+Implementar uma ingestão reproduzível via **Google Sheets LoLPI**, limpar e validar registros com Python, publicar dados tratados no **BigQuery**, modelar um **esquema estrela** e consumir o Data Mart no **Power BI**. Demonstrar testes, idempotência, logs, controle de erros, versionamento e documentação.
 
 ### Perguntas de negócio
 
-- Qual o faturamento bruto e sua evolução mensal?
-- Quais marcas, categorias, lojas e regiões lideram vendas?
-- Qual o volume de devoluções e a taxa de devolução?
-- Qual a participação de unidades vendidas no canal online?
-- Quantos clientes distintos compraram em cada período?
-- Como as métricas mudam ao filtrar ano, canal, gênero ou faixa etária?
+- Quais equipes lideram o EPT em cada modalidade?
+- Como pontos base, eventos e penalidade compõem o ranking atual?
+- Qual o desempenho por equipe, campeonato, tier e formato BO1/BO3/BO5?
+- Quantos registros de jogos/mapas, vitórias e derrotas existem por período?
+- Quais equipes ocupam as colocações finais dos campeonatos?
+- Onde o ranking completo diverge das saídas das planilhas?
 
-**Definições iniciais (a confirmar com os dados):** faturamento bruto = `SUM(quantidade_vendida × preco_unitario_venda)`; devolução (%) = `SUM(quantidade_devolvida) / SUM(quantidade_vendida)`; participação online (%) = `unidades vendidas online / unidades vendidas totais`; ticket médio = faturamento / número de pedidos **somente se houver identificador confiável de pedido**. Caso contrário, rotular a média por linha de venda como *valor médio por registro*, e não ticket médio. Receita líquida, margem e taxa por pedido dependem de regras e campos adicionais.
+**Regras observadas, sujeitas à confirmação do responsável:**
+
+- LoL: `SUM(D:BG) × (1 − penalidade_inatividade)` por equipe. A penalidade já é fração decimal: 0,71 representa 71%; não dividir novamente por 100.
+- CS2: `SUM(D:AX)` por equipe, sem aplicar a penalidade da coluna C na fórmula observada. Não igualar automaticamente à regra de LoL.
+- As somas incluem todos os campos numéricos do intervalo, inclusive campos sem prefixo `PTS`. Confirmar sua semântica antes de reinterpretar contribuições.
+- Pontos por partida dependem de tier, formato e resultado A/B. Pontos negativos de derrota são válidos. Validar entradas para impedir os fallbacks das fórmulas atuais para resultado/formato inesperado.
+- Ranking atual é uma medida por equipe/modalidade, não aditiva no tempo. Sua evolução depende de snapshots efetivamente armazenados; não há histórico de posições comprovado.
+- Granularidade mapa/jogo/série de CS2 e desempate do ranking permanecem pendentes. Contagem de registros não equivale a contagem de séries.
+
+| Tier | BO1 vitória / derrota | BO3 vitória / derrota | BO5 vitória / derrota |
+|---|---:|---:|---:|
+| S | +10 / -10 | +15 / -15 | +20 / -20 |
+| A | +8 / -8 | +12 / -12 | +15 / -15 |
+| B | +6 / -6 | +9 / -9 | +12 / -12 |
+| C | +4 / -4 | +6 / -6 | +8 / -8 |
+| D | 0 / 0 | 0 / 0 | 0 / 0 |
+
+| Tier | 1º | 2º | 3º | 4º | 5º | 6º | 7º | 8º |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| S | 100 | 75 | 60 | 50 | 40 | 30 | 20 | 10 |
+| A | 75 | 50 | 40 | 35 | 30 | 25 | 15 | 10 |
+| B | 50 | 35 | 30 | 25 | 20 | 15 | 10 | 5 |
+| C | 25 | 20 | 15 | 10 | 8 | 6 | 4 | 2 |
+
+Não há regra observada de colocação final para tier D; não presumir zero. As regras coincidem nas duas fontes na leitura registrada; preservar modalidade e versão/data de referência até confirmar se são compartilhadas.
 
 ### Habilidades trabalhadas
 
-Python, Pandas, Google Sheets API, autenticação por Service Account, contratos de dados, validação, SQL analítico, BigQuery, `MERGE`, modelagem dimensional, DAX (`SUM`, `DIVIDE`, `CALCULATE`, `DISTINCTCOUNT`), Power Query, visualização, Git e pytest. A transformação principal será em Python/BigQuery; o Power Query servirá para inspeção e ajustes leves de apresentação, sem duplicar regras de negócio.
+Python, Pandas, Google Sheets LoLPI, autenticação por Service Account, contratos de dados, validação, SQL analítico, BigQuery, `MERGE`, modelagem dimensional, DAX (`SUM`, `DIVIDE`, `CALCULATE`, `DISTINCTCOUNT`), Power Query, visualização, Git e pytest. A transformação principal será em Python/BigQuery; o Power Query servirá para inspeção e ajustes leves de apresentação, sem duplicar regras de negócio.
 
 ## 2. Arquitetura e organização
 
@@ -58,7 +91,7 @@ retail-analytics-pipeline/
 │   └── data_contract.md          # esquema validado, granularidade e regras
 ├── scripts/
 │   ├── discover.py               # enumeração de abas e cabeçalhos
-│   ├── extract.py                # Google Sheets API
+│   ├── extract.py                # Google Sheets LoLPI
 │   ├── transform.py              # limpeza e tipagem
 │   ├── validate.py               # verificações e quarentena
 │   ├── load.py                   # carga no BigQuery
@@ -78,7 +111,7 @@ retail-analytics-pipeline/
 │   └── rejected/.gitkeep        # não publicar dados pessoais
 ├── logs/.gitkeep
 ├── pbix/
-│   ├── retail_analytics.pbix     # produzido no Power BI Desktop
+│   ├── ept_analytics.pbix     # produzido no Power BI Desktop
 │   └── dax_measures.md
 └── docs/
     ├── data_dictionary.md
@@ -94,9 +127,9 @@ retail-analytics-pipeline/
 | Fonte | Google Sheets | Dados operacionais; nunca editar via pipeline |
 | Extração | Python local | Ler via API, preservar referência de aba/linha |
 | Preparação | Python local | Normalização, tipos, regras, rejeitados |
-| Staging | BigQuery `retail_staging` | Dados limpos com metadados de execução |
-| Core | BigQuery `retail_core` | Dimensões e fato no grão documentado |
-| Mart | BigQuery `retail_mart` | Visões analíticas e indicadores reutilizáveis |
+| Staging | BigQuery `ept_staging` | Dados limpos com metadados de execução |
+| Core | BigQuery `ept_core` | Dimensões e fato no grão documentado |
+| Mart | BigQuery `ept_mart` | Visões analíticas e indicadores reutilizáveis |
 | Consumo | Power BI Desktop | Modelo semântico, DAX, filtros e visuais |
 
 **Decisão de projeto:** usar cargas completas e substituição atômica de tabelas de staging no MVP, seguida de reconstrução determinística de core/marts. Isso é mais simples e seguro para bases pequenas que um incremental prematuro. Evolução opcional: `MERGE` por chave natural estável, controle de exclusões e snapshots.
@@ -104,7 +137,7 @@ retail-analytics-pipeline/
 ## 3. Pré-requisitos
 
 - Python **3.11+**, Git, VS Code, Power BI Desktop (Windows), projeto GCP com faturamento/cotas verificados e BigQuery API habilitada.
-- Google Sheets API habilitada no mesmo projeto (ou projeto autorizado), Service Account com acesso **Leitor** às duas planilhas, e permissões mínimas no BigQuery para criar jobs e gravar nos datasets previstos.
+- Google Sheets LoLPI habilitada no mesmo projeto (ou projeto autorizado), Service Account com acesso **Leitor** às duas planilhas, e permissões mínimas no BigQuery para criar jobs e gravar nos datasets previstos.
 - Uma identidade para Python (Service Account) e uma identidade de usuário/organizacional para o conector BigQuery no Power BI; permissões de consulta no Data Mart.
 - Confirmar região do BigQuery (ex.: `southamerica-east1`), custos de armazenamento/consultas e eventuais restrições do sandbox gratuito. **Não presumir que cargas e DML funcionam sem billing**.
 
@@ -144,7 +177,7 @@ SHEET_A_ID=1kMau11VHrNjGijHWZ1ii0c_U2zcuCTUE_T04MReKjJE
 SHEET_B_ID=1ivLs5NDUxHZNU8cK8RRSIzfWVoGPKd2R6B9eah2elx8
 ```
 
-**Autenticação:** em desenvolvimento local, preferir Application Default Credentials (`gcloud auth application-default login`) quando permitido; se usar JSON de Service Account, guardá-lo **fora do repositório**. Compartilhar cada planilha com o `client_email` da Service Account: ela é uma identidade distinta da conta pessoal que criou a planilha. Nunca commitar `.env`, chaves, dumps de clientes ou dados identificáveis.
+**Autenticação:** em desenvolvimento local, preferir Application Default Credentials (`gcloud auth application-default login`) quando permitido; se usar JSON de Service Account, guardá-lo **fora do repositório**. Compartilhar cada planilha com o `client_email` da Service Account: ela é uma identidade distinta da conta pessoal que criou a planilha. Nunca commitar `.env`, chaves, dumps com dados pessoais ou dados identificáveis.
 
 `.gitignore` mínimo:
 
@@ -165,8 +198,8 @@ data/rejected/*
 
 ```mermaid
 flowchart LR
-    A[Google Sheets A] --> C[Google Sheets API]
-    B[Google Sheets B] --> C
+    A[Google Sheets LoL] --> C[Google Sheets LoLPI]
+    B[Google Sheets CS2] --> C
     C --> D[Python: extração e descoberta]
     D --> E[Python: limpeza, tipagem e validação]
     E -->|válidos| F[(BigQuery staging)]
@@ -174,7 +207,7 @@ flowchart LR
     F --> G[(BigQuery core: dimensões e fato)]
     G --> H[(BigQuery mart: views analíticas)]
     H --> I[Power BI: modelo semântico e DAX]
-    I --> J[Dashboard comercial]
+    I --> J[Dashboard EPT]
     E --> K[Logs e controle de execução]
     F --> K
 ```
@@ -207,7 +240,7 @@ print('Projeto autenticado:', client.project)
 
 **Objetivo:** identificar **quais abas e colunas existem de fato**, qual a granularidade e como as duas fontes se relacionam.
 
-**Detalhamento e orientação:** enumerar abas, dimensões, primeira linha útil, linhas decorativas, colunas vazias, chaves e tipos aparentes. Registrar em `docs/data_dictionary.md` uma tabela com `planilha`, `aba`, `coluna_original`, `coluna_destino`, `tipo`, `obrigatório`, `regra`, `exemplo mascarado`. Decidir quais abas são vendas, clientes, lojas e produtos, **somente se existirem**. Verificar se vendas estão distribuídas por anos/abas e se têm estrutura compatível para concatenação. Identificar identificador de pedido ou transação, se houver.
+**Detalhamento e orientação:** partir do inventário EPT e revalidar abas, intervalos úteis, cabeçalhos, tipos e fórmulas pela API. Registrar em `docs/data_dictionary.md`: planilha, modalidade, aba, posição da coluna, nome original, nome canônico, tipo, obrigatoriedade, regra e exemplo. Mapear os dois blocos de regras separadamente. Preservar posições dos cabeçalhos duplicados `FEMEE EPT S1` (T/U em LoL; Q/R em CS2) até confirmar a semântica. Definir granularidade de partidas/mapas/séries, aliases e significado de cada coluna de evento. Registrar decisões e pendências da seção 8 no contrato.
 
 **Exemplo:**
 
@@ -235,7 +268,7 @@ for key in ('SHEET_A_ID', 'SHEET_B_ID'):
 
 **Objetivo:** ler as fontes com Python e manter rastreabilidade.
 
-**Detalhamento e orientação:** usar `gspread`, leitura por aba, respeitar cotas, preservar `source_spreadsheet_id`, `source_tab`, `source_row` e `extracted_at`. Não usar exportação manual CSV/Excel. Se houver linhas de título decorativas, detectar/configurar a linha do cabeçalho em vez de assumir a primeira linha.
+**Detalhamento e orientação:** usar `gspread`, leitura por aba, respeitar cotas, preservar `source_spreadsheet_id`, `source_tab`, `source_row` e `extracted_at`. Não usar exportação manual CSV/Excel. Configurar intervalos e cabeçalhos por bloco; a coluna A de partidas é vazia. Capturar valores não formatados para cálculos e fórmulas separadamente para auditoria. Datas podem vir como seriais do Sheets. O exemplo abaixo usa valores exibidos e deve ser adaptado aos blocos e cabeçalhos repetidos, preservando posições sem perda de colunas.
 
 **Exemplo:**
 
@@ -261,169 +294,164 @@ def extract_tab(book, tab_name, header_row=1):
 
 **Objetivo:** transformar dados heterogêneos em registros consistentes.
 
-**Detalhamento e orientação:** criar mapeamentos explícitos de colunas por aba, normalizar espaços e valores ausentes, datas com formato declarado, inteiros e valores monetários com precisão decimal. Aplicar regras de negócio do curso **somente quando compatíveis**: dividir localidade composta, recombinar nome de gerente, padronizar gênero, classificar faixa etária e corrigir preço/custo que tenham escala ×100 comprovada. **Nunca dividir valores por 100 indiscriminadamente.** Idade deve usar uma data de referência declarada, evitando mudança silenciosa no histórico.
+**Detalhamento e orientação:** normalizar espaços, datas e números conforme representação da API. Valores exibidos usam cultura pt-BR; datas seriais exigem conversão explícita e política de fuso. Preservar penalidades fracionárias e pontos negativos. Definir o significado de hífen, N/A, vazio e zero por campo antes de converter para nulo.
+
+Criar IDs e aliases por modalidade. Despivotar colunas de eventos mantendo posição e tipo de campo (resultado/colocação/pontos); preservar pontos base separadamente, sem repeti-los por evento. Despivotar posições 1º–8º dos campeonatos. Separar os dois blocos de regras. Em LoL, confirmar unidade/formato de `GAME TIME`; em CS2, separar mapa e placar. Excluir embeds HTML do modelo e validar URLs necessárias.
 
 **Exemplo:**
 
 ```python
 import pandas as pd
-from decimal import Decimal, InvalidOperation
 
 def clean_text(value):
     if pd.isna(value):
         return None
-    value = ' '.join(str(value).strip().split())
-    return value or None
+    return ' '.join(str(value).strip().split()) or None
 
-def parse_money_br(value):
-    value = clean_text(value)
-    if value is None:
-        return None
-    try:
-        return Decimal(value.replace('R$', '').replace('.', '').replace(',', '.').strip())
-    except InvalidOperation as exc:
-        raise ValueError(f'Valor monetário inválido: {value!r}') from exc
-
-# Exemplo para números em formato pt-BR: "1.234,56" -> Decimal('1234.56')
-# Para valores no padrão en-US, implementar parser distinto, definido por coluna.
+# Preservar placeholders até definir sua semântica por campo.
+assert clean_text('  GHOST   GAMING ') == 'GHOST GAMING'
+assert clean_text('-') == '-'
 ```
 
-**O que será testado:** nulos e espaços, separador decimal, datas inválidas, escala monetária, acentos, duplicatas e idempotência das transformações.
+**O que será testado:** percentuais sem conversão dupla; datas seriais/exibidas; preservação de zero e pontos negativos; cabeçalhos repetidos sem perda; aliases por modalidade; unpivot sem repetir pontos base; idempotência.
 
 ### Requisito 5 — Validar dados e produzir quarentena
 
 **Objetivo:** impedir que registros inválidos contaminem os indicadores.
 
-**Detalhamento e orientação:** verificar chaves não nulas, unicidade em cadastros, datas válidas, quantidades não negativas, valores monetários válidos e integridade referencial. Definir política para `quantidade_devolvida > quantidade_vendida`: rejeitar ou investigar conforme semântica da origem. Separar `valid_records` e `rejected_records`, com `source_row`, regra e motivo. Evitar logs com nomes, e-mails ou outros dados pessoais.
+**Detalhamento e orientação:** verificar IDs, equipes identificáveis, modalidade, datas, tier, formato, resultado e integridade com campeonatos. Pontos negativos de derrota são válidos. Distinguir incompletos, não aplicáveis e jogos não disputados conforme contrato. Investigar as duas ocorrências de GHOST GAMING no CS2 antes de deduplicar ou somar. Linhas sem equipe, placeholders e fórmulas sem chave não entram no ranking válido; contabilizar linhas vazias separadamente. Rejeitados preservam fonte, linha e motivo, sem dados pessoais desnecessários em logs.
 
-**Exemplo:**
+**Exemplo (subconjunto de regras para registros concluídos):**
 
 ```python
-def validate_sales(df):
-    required = ['customer_id', 'store_id', 'product_id', 'sale_date', 'quantity_sold']
+def validate_matches(df):
+    required = ['game_id', 'team_a_id', 'team_b_id', 'match_date',
+                'tier', 'format', 'result']
     missing = [c for c in required if c not in df.columns]
     if missing:
         raise ValueError(f'Colunas obrigatórias ausentes: {missing}')
-    mask = df[required].notna().all(axis=1) & (df['quantity_sold'] >= 0)
+    mask = (
+        df[required].notna().all(axis=1)
+        & df['game_id'].isin(['LoL', 'CS2'])
+        & df['tier'].isin(['S', 'A', 'B', 'C', 'D'])
+        & df['format'].isin(['BO1', 'BO3', 'BO5'])
+        & df['result'].isin(['A', 'B'])
+        & df['team_a_id'].ne(df['team_b_id'])
+    )
     return df.loc[mask].copy(), df.loc[~mask].copy()
 ```
 
-**O que será testado:** `total_extraído = total_válido + total_rejeitado`; razões de rejeição documentadas; pipeline falha com esquema incompatível, sem descartar silenciosamente registros.
+**O que será testado:** candidatos = válidos + rejeitados; vazios/separadores contabilizados à parte; esquema incompatível interrompe pipeline. A validação completa também verifica IDs canônicos, placeholders, referências e pontos conforme regras por modalidade/versão.
 
 ### Requisito 6 — Carregar staging no BigQuery
 
 **Objetivo:** publicar dados limpos com esquema explícito.
 
-**Detalhamento e orientação:** criar `retail_staging`, `retail_core` e `retail_mart` na mesma localização; para MVP, carregar DataFrame em tabela temporária de execução e publicar por substituição controlada após sucesso. Evitar `WRITE_APPEND` a cada reexecução, que duplicaria linhas. Definir tipos de schema explicitamente; valores monetários devem ser `NUMERIC`, datas `DATE`, timestamps `TIMESTAMP`.
+**Detalhamento e orientação:** criar `ept_staging`, `ept_core` e `ept_mart` na mesma localização; para MVP, carregar DataFrame em tabela temporária de execução e publicar por substituição controlada após sucesso. Evitar `WRITE_APPEND` a cada reexecução, que duplicaria linhas. Definir tipos de schema explicitamente; pontos e penalidades devem ser `NUMERIC`, datas `DATE` e metadados UTC `TIMESTAMP`. Definir data/hora de partidas conforme contrato.
 
-**Exemplo:**
+**Exemplo (tabela de execução, antes da promoção):**
 
 ```python
 from google.cloud import bigquery
 
 client = bigquery.Client()
-table_id = f'{client.project}.retail_staging.sales_clean'
+# run_id deve ser um identificador seguro gerado pelo pipeline.
+table_id = f'{client.project}.ept_staging.matches_run_{run_id}'
 config = bigquery.LoadJobConfig(
     write_disposition=bigquery.WriteDisposition.WRITE_TRUNCATE,
     schema=[
-        bigquery.SchemaField('customer_id', 'STRING'),
-        bigquery.SchemaField('store_id', 'STRING'),
-        bigquery.SchemaField('product_id', 'STRING'),
-        bigquery.SchemaField('sale_date', 'DATE'),
-        bigquery.SchemaField('quantity_sold', 'INTEGER'),
-        bigquery.SchemaField('unit_price', 'NUMERIC'),
+        bigquery.SchemaField('source_record_key', 'STRING'),
+        bigquery.SchemaField('game_id', 'STRING'),
+        bigquery.SchemaField('team_a_id', 'STRING'),
+        bigquery.SchemaField('team_b_id', 'STRING'),
+        bigquery.SchemaField('match_date', 'DATE'),
+        bigquery.SchemaField('points_a', 'NUMERIC'),
+        bigquery.SchemaField('points_b', 'NUMERIC'),
     ],
 )
-# sales_df deve conter exatamente os campos/tipos compatíveis com o schema.
-job = client.load_table_from_dataframe(sales_df, table_id, job_config=config)
+# matches_df deve conter exatamente os campos/tipos deste exemplo reduzido.
+job = client.load_table_from_dataframe(matches_df, table_id, job_config=config)
 job.result()
 print('Linhas carregadas:', client.get_table(table_id).num_rows)
+# Validar e promover para matches_clean antes de reconstruir core/marts.
 ```
 
-**O que será testado:** contagem entre DataFrame válido e staging; nenhuma duplicação após duas execuções; falhas de carga não deixam uma tabela final parcialmente atualizada. **Evolução obrigatória para produção:** usar tabela de execução e promover somente após validação, em vez de truncar diretamente a tabela publicada.
+**O que será testado:** contagens entre DataFrame e staging; nenhuma duplicação após duas execuções; falhas não deixam tabela publicada parcialmente atualizada. Promover tabelas de execução somente após validação.
 
 ### Requisito 7 — Construir dimensões no BigQuery
 
 **Objetivo:** preparar entidades descritivas para o modelo estrela.
 
-**Detalhamento e orientação:** criar `dim_customer`, `dim_store`, `dim_product` e `dim_date` a partir das tabelas de staging, conforme disponibilidade real. Uma linha por chave natural em cada dimensão; documentar estratégia para clientes/lojas/produtos sem correspondência. Para o MVP, dimensões tipo 1 (estado atual), sem histórico SCD2.
+**Detalhamento e orientação:** criar `dim_game`, `dim_team`, `dim_championship` e `dim_date`. IDs de equipe/campeonato incorporam modalidade e aliases confirmados; nomes homônimos entre modalidades não implicam mesma entidade. Usar dimensões tipo 1 no MVP. Validar cobertura e modalidade do cadastro de campeonatos CS2.
 
-**Exemplo SQL (pressupõe `retail_staging.products_clean` com os campos abaixo):**
+**Exemplo SQL (cadastro canônico previamente validado):**
 
 ```sql
-CREATE OR REPLACE TABLE `SEU_PROJETO.retail_core.dim_product` AS
-SELECT
-  CAST(product_id AS STRING) AS product_id,
-  ANY_VALUE(product_name) AS product_name,
-  ANY_VALUE(category) AS category,
-  ANY_VALUE(brand) AS brand
-FROM `SEU_PROJETO.retail_staging.products_clean`
-WHERE product_id IS NOT NULL
-GROUP BY product_id;
+CREATE OR REPLACE TABLE `SEU_PROJETO.ept_core.dim_team` AS
+SELECT team_id, game_id, canonical_name
+FROM `SEU_PROJETO.ept_staging.teams_clean`;
 ```
 
-**Observação:** `ANY_VALUE` serve apenas como exemplo de estrutura; em caso de atributos conflitantes para a mesma chave, o pipeline deve **falhar ou aplicar regra determinística documentada** (por exemplo, último `updated_at` confiável). Não escolher atributos arbitrários em produção.
+**O que será testado:** IDs únicos e não nulos; aliases sem ambiguidade; atributos conflitantes interrompem publicação; nenhuma escolha arbitrária de atributos.
 
-**O que será testado:** chaves únicas e não nulas; contagem de entidades; atributos conflitantes identificados; relacionamentos possíveis sem muitos-para-muitos inesperados.
-
-### Requisito 8 — Construir fato de vendas e calendário
+### Requisito 8 — Construir fatos EPT e calendário
 
 **Objetivo:** estabelecer granularidade analítica consistente.
 
-**Detalhamento e orientação:** confirmar se cada linha da fonte representa item de venda, pedido ou agregado. **Não inventar `order_id`.** A fato deve preservar a chave natural de origem, quando existir, ou uma chave técnica determinística construída com identificação da fonte e da linha, com limitações documentadas se as linhas puderem mudar. A tabela fato terá chaves de cliente, loja, produto, data e medidas aditivas; particionar por data e clusterizar por chaves úteis.
+**Detalhamento e orientação:** criar `fact_match` no grão confirmado de registro de jogo/mapa, com modalidade, campeonato, data/hora, fase, tier, formato, equipes A/B, resultado e pontos. Um `match_record_id` identifica esse registro; só criar ID de série após confirmar identidade e agrupamento. As fontes não têm IDs estáveis: manter mapeamento persistente; fonte/linha é referência técnica que muda com reordenação.
 
-**Exemplo SQL (campos hipotéticos do contrato-alvo):**
+Criar `fact_match_participation` com duas linhas por registro concluído (uma por equipe), evitando relacionamentos A/B ambíguos. Criar `fact_team_event_score` no grão modalidade/equipe/evento/campo de origem, distinguindo resultado/colocação de pontos; colocações finais ficam em tabela campeonato/posição/equipe. Não somar pontos de partidas ao histórico de eventos sem comprovar linhagem: podem ser contribuições já acumuladas.
+
+Normalizar `scoring_rule_match` e `scoring_rule_placement` separadamente, com modalidade e versão. Criar calendário sem lacunas. Particionar fatos datados por data; não inventar datas de eventos.
+
+**Exemplo SQL (participação de registros concluídos e validados):**
 
 ```sql
-CREATE OR REPLACE TABLE `SEU_PROJETO.retail_core.fact_sales`
-PARTITION BY sale_date
-CLUSTER BY store_id, product_id AS
-SELECT
-  CAST(source_record_key AS STRING) AS sale_line_key,
-  DATE(sale_date) AS sale_date,
-  CAST(customer_id AS STRING) AS customer_id,
-  CAST(store_id AS STRING) AS store_id,
-  CAST(product_id AS STRING) AS product_id,
-  CAST(quantity_sold AS INT64) AS quantity_sold,
-  CAST(quantity_returned AS INT64) AS quantity_returned,
-  CAST(unit_price AS NUMERIC) AS unit_price,
-  CAST(quantity_sold AS NUMERIC) * CAST(unit_price AS NUMERIC) AS gross_revenue
-FROM `SEU_PROJETO.retail_staging.sales_clean`;
+CREATE OR REPLACE TABLE `SEU_PROJETO.ept_core.fact_match_participation`
+PARTITION BY match_date
+CLUSTER BY game_id, team_id AS
+SELECT match_record_id, game_id, championship_id, match_date,
+       team_a_id AS team_id, 'A' AS side,
+       result = 'A' AS is_win, points_a AS points
+FROM `SEU_PROJETO.ept_staging.matches_clean`
+UNION ALL
+SELECT match_record_id, game_id, championship_id, match_date,
+       team_b_id AS team_id, 'B' AS side,
+       result = 'B' AS is_win, points_b AS points
+FROM `SEU_PROJETO.ept_staging.matches_clean`;
 ```
 
-**O que será testado:** grão documentado; chaves estáveis; nenhuma multiplicação de linhas nos joins; `SUM(gross_revenue)` reconciliado com a origem transformada; calendário sem lacunas no intervalo de análise.
+**O que será testado:** unicidade registro/lado; duas participações por registro concluído; pontos A/B reconciliados; grão mapa/série documentado; contribuições e pontos base sem duplicação.
 
 ### Requisito 9 — Criar Data Mart e indicadores SQL
 
 **Objetivo:** disponibilizar uma camada estável e de fácil consumo pelo Power BI.
 
-**Detalhamento e orientação:** criar views de detalhe e agregação mensal; fazer joins da fato para dimensões em chaves únicas. Evitar armazenar dados pessoais desnecessários no mart. Métricas devem ter mesma definição em SQL e DAX.
+**Detalhamento e orientação:** publicar views de participação, eventos, colocações e ranking atual. Calcular ranking sobre toda a população válida, preservando pontos antes da penalidade, penalidade informada, regra aplicada e EPT final. Reproduzir fórmulas observadas para auditoria; mudanças de negócio exigem decisão registrada. Comparar saídas truncadas sem tratá-las como ranking completo correto.
+
+A tabela `ranking_current` terá uma linha por modalidade/equipe e data de referência da carga. Snapshots históricos são opcionais e só existem após armazenamento. Filtros de partidas por período não representam recálculo histórico do EPT.
 
 **Exemplo:**
 
 ```sql
-CREATE OR REPLACE VIEW `SEU_PROJETO.retail_mart.vw_sales_analytics` AS
-SELECT
-  f.sale_date, f.customer_id, f.store_id, f.product_id,
-  p.brand, p.category,
-  s.store_type, s.continent,
-  f.quantity_sold, f.quantity_returned, f.gross_revenue
-FROM `SEU_PROJETO.retail_core.fact_sales` AS f
-LEFT JOIN `SEU_PROJETO.retail_core.dim_product` AS p USING (product_id)
-LEFT JOIN `SEU_PROJETO.retail_core.dim_store` AS s USING (store_id);
+CREATE OR REPLACE VIEW `SEU_PROJETO.ept_mart.vw_match_participation` AS
+SELECT f.*, t.canonical_name AS team_name
+FROM `SEU_PROJETO.ept_core.fact_match_participation` AS f
+LEFT JOIN `SEU_PROJETO.ept_core.dim_team` AS t USING (team_id, game_id);
 ```
 
 ```sql
-SELECT
-  DATE_TRUNC(sale_date, MONTH) AS month,
-  SUM(gross_revenue) AS gross_revenue,
-  SUM(quantity_sold) AS units_sold,
-  SAFE_DIVIDE(SUM(quantity_returned), SUM(quantity_sold)) AS return_rate
-FROM `SEU_PROJETO.retail_mart.vw_sales_analytics`
-GROUP BY 1 ORDER BY 1;
+SELECT game_id, team_id,
+       DATE_TRUNC(match_date, MONTH) AS month,
+       COUNT(*) AS records_played,
+       COUNTIF(is_win) AS wins,
+       SAFE_DIVIDE(COUNTIF(is_win), COUNT(*)) AS win_rate,
+       SUM(points) AS match_points
+FROM `SEU_PROJETO.ept_mart.vw_match_participation`
+GROUP BY 1, 2, 3;
 ```
 
-**O que será testado:** totais entre fato e mart reconciliados; joins sem fanout; `SAFE_DIVIDE` para denominador zero; filtros temporais consistentes.
+**O que será testado:** totais reconciliados; joins sem multiplicação; duas participações não contam como dois jogos globais; denominador zero protegido; ranking completo; empates sinalizados até confirmar desempate; regra de penalidade por modalidade respeitada.
 
 ### Requisito 10 — Conectar Power BI ao BigQuery
 
@@ -434,71 +462,70 @@ GROUP BY 1 ORDER BY 1;
 **Exemplo de modelo:**
 
 ```text
-dim_date[date]       (1) ─── (*) fact_sales[sale_date]
-dim_customer[id]     (1) ─── (*) fact_sales[customer_id]
-dim_store[id]        (1) ─── (*) fact_sales[store_id]
-dim_product[id]      (1) ─── (*) fact_sales[product_id]
+dim_date[date]                    (1) ─── (*) fact_match_participation[match_date]
+dim_game[game_id]                 (1) ─── (*) fact_match_participation[game_id]
+dim_team[team_id]                 (1) ─── (*) fact_match_participation[team_id]
+dim_championship[championship_id] (1) ─── (*) fact_match_participation[championship_id]
 ```
 
-**O que será testado:** conexão autenticada; atualização manual sem erros; tipos corretos; filtros de dimensão alteram métricas da fato.
+Usar IDs globalmente únicos incorporando modalidade. Conectar dimensões diretamente aos demais fatos compatíveis, evitando caminhos duplicados entre dimensões. Ranking atual recebe filtros de equipe/modalidade sem relacionamento temporal que simule histórico inexistente.
+
+**O que será testado:** conexão autenticada; atualização sem erros; tipos corretos; filtros alteram métricas sem ambiguidades.
 
 ### Requisito 11 — Criar medidas DAX e validar semântica
 
 **Objetivo:** construir KPIs que respondem ao contexto dos filtros.
 
-**Detalhamento e orientação:** criar tabela de medidas no Power BI; conferir nomenclatura real dos campos. As fórmulas abaixo pressupõem fato e dimensões separadas com nomes em inglês.
+**Detalhamento e orientação:** criar tabela de medidas e conferir nomes reais. Os exemplos pressupõem participação por equipe em registros concluídos e ranking atual com uma linha por modalidade/equipe.
 
 **Exemplo DAX:**
 
 ```dax
-Unidades Vendidas = SUM(fact_sales[quantity_sold])
+Registros de Jogo = DISTINCTCOUNT(fact_match_participation[match_record_id])
 
-Unidades Devolvidas = SUM(fact_sales[quantity_returned])
+Participações = COUNTROWS(fact_match_participation)
 
-Taxa de Devolução = DIVIDE([Unidades Devolvidas], [Unidades Vendidas])
+Vitórias =
+    CALCULATE([Participações], fact_match_participation[is_win] = TRUE())
 
-Faturamento Bruto = SUM(fact_sales[gross_revenue])
+Derrotas =
+    CALCULATE([Participações], fact_match_participation[is_win] = FALSE())
 
-Clientes Distintos = DISTINCTCOUNT(fact_sales[customer_id])
+Taxa de Vitória = DIVIDE([Vitórias], [Participações])
 
-Unidades Online =
-    CALCULATE(
-        [Unidades Vendidas],
-        dim_store[store_type] = "Online"
+Pontos de Partidas = SUM(fact_match_participation[points])
+
+Equipes Participantes = DISTINCTCOUNT(fact_match_participation[team_id])
+
+EPT Atual da Equipe =
+    IF(
+        HASONEVALUE(dim_game[game_id]) && HASONEVALUE(dim_team[team_id]),
+        MAX(ranking_current[ept_points]),
+        BLANK()
     )
-
-Participação Online = DIVIDE([Unidades Online], [Unidades Vendidas])
-
-Valor Médio por Linha = AVERAGE(fact_sales[gross_revenue])
 ```
 
-Se existir `order_id` confiável, acrescentar:
+**O que será testado:** SQL/DAX equivalentes sob mesmos filtros; porcentagens corretas; EPT sem soma entre modalidades/snapshots; mapas não rotulados como séries; taxa global por participação distinguida da taxa de uma equipe.
 
-```dax
-Pedidos Distintos = DISTINCTCOUNT(fact_sales[order_id])
-Ticket Médio por Pedido = DIVIDE([Faturamento Bruto], [Pedidos Distintos])
-```
+### Requisito 12 — Construir dashboard EPT
 
-**O que será testado:** medidas coincidem com SQL sob filtros equivalentes; porcentagens formatadas como percentual; resultados coerentes sem vendas; nenhum indicador rotulado indevidamente como ticket médio.
+**Objetivo:** entregar relatório interativo, legível e orientado à análise competitiva.
 
-### Requisito 12 — Construir dashboard comercial
-
-**Objetivo:** entregar relatório interativo, legível e orientado a decisões.
-
-**Detalhamento e orientação:** seguir hierarquia de leitura em Z do material de Power BI. Página 1 — **Visão Executiva**: cartões de faturamento, unidades, devolução (%) e clientes; evolução mensal em linha/área; ranking Top N de marcas; participação online; filtros por ano e canal. Página 2 — **Produtos e Lojas**: categorias, marcas, lojas e regiões/continentes **se disponíveis**. Página 3 — **Qualidade e Operação**: quantidade de registros processados, rejeitados, última carga e consistência das fontes, desde que essas métricas estejam publicadas no BigQuery.
+**Detalhamento e orientação:** seguir hierarquia de leitura em Z. Página 1 — **Ranking EPT Atual**: classificação e Top 20 por modalidade, pontos base, pontuação antes/depois da regra de penalidade e data de referência; empates explícitos. Página 2 — **Partidas e Campeonatos**: registros de jogos/mapas, vitórias, derrotas, taxa de vitória, pontos e colocações, filtrados por modalidade, equipe, campeonato, tier, formato e período. Duração LoL depende de unidade validada; mapa/placar CS2 são campos próprios. Página 3 — **Qualidade e Operação**: processados, rejeitados, última carga, duplicidades, campeonatos sem correspondência e divergências de ranking, com métricas publicadas no BigQuery.
 
 **Exemplo de configuração de visual:**
 
 ```text
 Visual: gráfico de barras horizontal
-Eixo: dim_product[brand]
-Valores: [Faturamento Bruto]
-Filtro do visual: Top N = 10, por [Faturamento Bruto]
-Ordenação: faturamento decrescente
-Interações: seleção de marca filtra série temporal e cartões
+Eixo: dim_team[canonical_name]
+Valores: [EPT Atual da Equipe]
+Filtro obrigatório: uma modalidade
+Filtro do visual: Top N = 20, por [EPT Atual da Equipe]
+Ordenação: EPT decrescente; sinalizar empates na fronteira do Top 20
+Interações: equipe selecionada filtra detalhes e composição de pontos
 ```
 
-**O que será testado:** leitura em Z, título e unidades explícitos, filtros cruzados, Top N correto, ausência de métricas enganosas, atualização reproduzível, capturas de tela em `docs/dashboard_screenshots/`.
+**O que será testado:** títulos e grãos explícitos; filtros cruzados; Top 20 sobre base completa; política de empates documentada; ausência de histórico inventado; alertas para pendências; capturas em `docs/dashboard_screenshots/`.
 
 ### Requisito 13 — Automatizar execução, testes e documentação
 
@@ -510,17 +537,20 @@ Interações: seleção de marca filtra série temporal e cartões
 
 ```python
 import pandas as pd
-from scripts.validate import validate_sales
+from scripts.validate import validate_matches
 
-def test_rejects_negative_quantity():
+def test_rejects_unexpected_result():
     df = pd.DataFrame([{
-        'customer_id': 'C1', 'store_id': 'L1', 'product_id': 'P1',
-        'sale_date': pd.Timestamp('2024-01-01'), 'quantity_sold': -2
+        'game_id': 'CS2', 'team_a_id': 'CS2:A', 'team_b_id': 'CS2:B',
+        'match_date': pd.Timestamp('2025-09-12'),
+        'tier': 'A', 'format': 'BO3', 'result': 'EMPATE'
     }])
-    valid, rejected = validate_sales(df)
+    valid, rejected = validate_matches(df)
     assert len(valid) == 0
     assert len(rejected) == 1
 ```
+
+Incluir testes para pontos negativos válidos, penalidade fracionária LoL, fórmula observada CS2 sem penalidade, aliases, cabeçalhos repetidos e ranking completo versus faixas truncadas.
 
 **Comandos:**
 
@@ -536,7 +566,7 @@ python -m scripts.pipeline
 
 **Objetivo:** publicar código, documentação e evidências de forma profissional.
 
-**Detalhamento e orientação:** criar branch `feat/requisito-XX`, commitar pequenas mudanças e abrir PR com objetivo, decisões, testes e prints. Não versionar dados de clientes, credenciais ou arquivos de configuração sensíveis. Incluir no README final screenshots, arquitetura, exemplos de queries e limitações. O `.pbix` pode ser versionado se tamanho/licença e privacidade permitirem; caso contrário, documentar reprodução e disponibilizar apenas imagens sem dados sensíveis.
+**Detalhamento e orientação:** criar branch `feat/requisito-XX`, commitar pequenas mudanças e abrir PR com objetivo, decisões, testes e prints. Não versionar dados pessoais, credenciais ou arquivos de configuração sensíveis. Incluir no README final screenshots, arquitetura, exemplos de queries e limitações. O `.pbix` pode ser versionado se tamanho/licença e privacidade permitirem; caso contrário, documentar reprodução e disponibilizar apenas imagens sem dados sensíveis.
 
 **Exemplo de Git:**
 
@@ -559,8 +589,8 @@ git push -u origin feat/requisito-02-discovery
 | Unicidade de dimensão | Nenhuma chave natural duplicada |
 | Integridade referencial | Chaves ausentes identificadas e tratadas por política explícita |
 | Fato | Sem duplicatas de chave de linha estável |
-| Valores | Quantidades não negativas; preços e datas válidos |
-| Reconciliação | Soma de vendas no staging/core/mart consistente |
+| Valores | Pontos negativos conforme regra; penalidade entre 0 e 1; datas e domínios válidos |
+| Reconciliação | Pontos consistentes entre staging/core/mart; ranking completo comparado às saídas derivadas |
 | Reexecução | Segunda carga idêntica não altera contagens/totais |
 | Observabilidade | `run_id`, status, duração, volume e rejeições registrados |
 
@@ -572,7 +602,7 @@ BigQuery pode cobrar por armazenamento, consultas, jobs e transferência conform
 
 - Aplicar menor privilégio às identidades; nunca publicar chaves JSON.
 - Verificar se as planilhas contêm dados pessoais reais; mascarar amostras e screenshots.
-- Evitar nomes/e-mails de clientes em logs e mart público.
+- Evitar nomes/e-mails de pessoas em logs e mart público.
 - Documentar retenção de rejeitados e acesso aos datasets.
 - Tratar `data/rejected` como local protegido e ignorado pelo Git.
 
@@ -582,12 +612,12 @@ BigQuery pode cobrar por armazenamento, consultas, jobs e transferência conform
 
 - [ ] R1 — Ambiente e credenciais
 - [ ] R2 — Inventário das duas planilhas e contrato real de dados
-- [ ] R3 — Extração via Google Sheets API
+- [ ] R3 — Extração via Google Sheets LoLPI
 - [ ] R4 — Normalização e tipagem
 - [ ] R5 — Validação e quarentena
 - [ ] R6 — Staging BigQuery
 - [ ] R7 — Dimensões
-- [ ] R8 — Fato e calendário
+- [ ] R8 — Fatos EPT e calendário
 - [ ] R9 — Data Mart e reconciliação SQL
 - [ ] R10 — Conexão Power BI
 - [ ] R11 — Medidas DAX
@@ -600,7 +630,7 @@ BigQuery pode cobrar por armazenamento, consultas, jobs e transferência conform
 1. A ingestão parte exclusivamente da API do Sheets, sem CSV baixado manualmente.
 2. O contrato de dados corresponde às abas e colunas **efetivamente inspecionadas**.
 3. O pipeline é reexecutável, registra falhas e não duplica fatos.
-4. O BigQuery disponibiliza fato/dimensões ou um mart equivalente coerente com a granularidade real.
+4. O BigQuery disponibiliza fatos/dimensões ou um mart equivalente coerente com a granularidade real.
 5. O Power BI consulta o BigQuery e apresenta indicadores validados com SQL.
 6. Testes unitários e de reconciliação são executáveis.
 7. Repositório contém documentação, evidências e nenhum segredo ou dado sensível.
@@ -612,20 +642,38 @@ BigQuery pode cobrar por armazenamento, consultas, jobs e transferência conform
 - dbt/Dataform para testes e transformação SQL.
 - Tabelas de auditoria e alertas automáticos.
 - Power BI Service com agendamento de atualização, sujeito a licença, credenciais e políticas da organização.
-- Análise de margem, cohort e ticket por pedido, **apenas se houver dados necessários**.
+- Snapshots de ranking para comparação temporal a partir da implantação, com regras versionadas.
 
 ## 8. Referências e premissas
 
 **Materiais fornecidos:**
 
-- *Memória de contexto técnica — Curso Básico de Power BI 2026* (documento anexado). Descreve a base de varejo de 2022–2024, preparação com Power Query, relacionamentos estrela, DAX, leitura em Z, Top N e dashboard comercial. O próprio documento alerta que as planilhas do curso não foram inspecionadas diretamente.
-- *API de Receitas* (README de referência anexado). Inspira a estrutura por requisitos, instruções, testes, Git/PR e critérios de aceite; não fornece dados de varejo.
+- [Análise técnica das planilhas EPT](Analise_Planilhas_EPT_para_README.md): fonte do contexto, inventário, fórmulas e alertas; leitura registrada em 07/11/2026.
+- *Memória de contexto técnica — Curso Básico de Power BI 2026* (material anteriormente fornecido): referência didática de modelagem estrela, DAX, leitura em Z e Top N. O domínio deste projeto é EPT.
+- *API de Receitas* (README de referência anteriormente fornecido): inspira a estrutura por requisitos, instruções, testes, Git/PR e critérios de aceite.
 - [Curso Básico de Power BI 2026 — Hashtag Treinamentos](https://www.youtube.com/watch?v=7cUrsltJbEI).
 - [Google Sheets API](https://developers.google.com/workspace/sheets/api/guides/concepts).
 - [BigQuery — documentação oficial](https://cloud.google.com/bigquery/docs).
 - [Power BI — conector Google BigQuery](https://learn.microsoft.com/power-query/connectors/google-bigquery).
 
-**Premissas pendentes:** nomes das abas, campos reais, formato de datas e moedas, chaves, volume de dados, cobertura de anos, presença de pedidos, significado de devoluções, políticas de dados pessoais e permissões de leitura das duas planilhas. O requisito 2 é o **gate obrigatório** para substituir exemplos hipotéticos por código e SQL definitivos.
+### Limitações observadas e decisões pendentes
+
+| Achado na análise de 07/11/2026 | Tratamento no projeto |
+|---|---|
+| EPT CS2 consulta apenas A2:B100 (99 registros, 98 nomes únicos) | Recalcular sobre toda a população válida; saída atual não comprova ranking completo |
+| Site LoL consulta até linha 199, omitindo 26 candidatos; site CS2 lê A2:B20 (19 candidatos) | Validar Top 20 contra base completa; alteração das fórmulas de origem cabe ao responsável |
+| LoL aplica penalidade; CS2 não aplica | Preservar cálculo observado por modalidade e confirmar política |
+| GHOST GAMING duplicada no CS2; 14 linhas sem equipe; placeholder em LoL | Investigar identidade, registrar exclusões e não somar/deduplicar arbitrariamente |
+| FEMEE EPT S1 repetido em ambas as bases | Preservar posições e confirmar significado antes de renomear |
+| EPT soma campos numéricos sem prefixo PTS | Mapear contribuições; não confundir resultado, colocação e pontos |
+| Eventos com nomes LoL no CS2; campeonatos CS2 até 2024 versus partidas em 2025 | Confirmar modalidade e cadastro; tratar referências sem correspondência |
+| GAME TIME distinto por modalidade; granularidade CS2 incerta | Separar duração/mapa/placar e confirmar jogo/mapa/série |
+| Datas/equipes ausentes; hífen, N/A, vazio e zero | Definir ausência, bye, não participação, não aplicável e zero por campo |
+| Campeonato Mineiro LoL 2026 consta EM ANDAMENTO com término em julho de 2026 | Sinalizar inconsistência e confirmar atualização do status |
+| Origem de PONTOS BASE nas saídas não esclarecida; título LoL contém 29.12.26 | Confirmar linhagem e significado da data no título |
+| Desempate e histórico de posições não demonstrados | Expor empates e ranking atual; evolução somente com snapshots armazenados |
+
+O requisito 2 é a etapa obrigatória para validar o contrato e registrar decisões em `docs/decisions.md`. Permanecem pendentes permissões efetivas da identidade de execução, frequência de atualização e política de dados pessoais. Pendências críticas impedem a publicação dos indicadores afetados como definitivos. O pipeline mantém as planilhas em modo somente leitura.
 
 ---
 
