@@ -1,0 +1,27 @@
+# Credenciais locais (Google Cloud / BigQuery e outros servicos)
+/cred/
+/credentials/
+/secrets/
+**/credentials.json
+**/token.json
+**/application_default_credentials.json
+**/*service-account*.json
+**/*service_account*.json
+.aws/
+.gcloud/
+
+# Variaveis de ambiente com segredos
+.env
+.env.*
+!.env.example
+!.env.template
+
+# Chaves privadas e certificados com chave privada
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Configuracoes locais e checkpoints de notebooks
+.ipynb_checkpoints/
+

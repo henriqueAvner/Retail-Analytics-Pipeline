@@ -1,0 +1,24 @@
+``` text
+=== ARQUIVO: 02_pipeline_campeonatos.txt ===
+ETAPA 1: HIGIENIZAÇÃO DE SCHEMA E METADADOS
+1. Padronizar os nomes de colunas para snake_case sem acentuação (ex.: "DAT. INICIO" -> "start_date", "1º Lugar" -> "place_1st").
+2. Remover espaços em branco no início e fim de todas as colunas de texto.
+(feito)
+
+ETAPA 2: LIMPEZA DE COLUNAS HTML E EMBEDS
+1. Avaliar a persistência das colunas "EMBED MATA-MATA" e "EMBED FASE DE GRUPOS":
+   - Opção A: Isolar em uma tabela satélite de metadados de mídia externa.
+   - Opção B: Extrair apenas o atributo "src" das tags <iframe> mantendo apenas a URL limpa.
+2. Tratar valores ausentes ou vazios nas colunas de links e embeds como NULL.
+
+ETAPA 3: PARSING E PADRONIZAÇÃO DE TIPOS
+1. Converter as colunas "DAT. INICIO" e "DAT. TERMINO" do formato DD/MM/YYYY para o padrão SQL ISO DATE (YYYY-MM-DD).
+2. Padronizar a coluna "Tier" removendo o prefixo "TIER " se necessário (ex.: "TIER S" -> "S").
+3. Normalizar valores categóricos da coluna "STATUS" (ex.: "EM ANDAMENTO", "FINALIZADO").
+
+ETAPA 4: DESACOPLAMENTO RELACIONAL (NORMALIZAÇÃO)
+1. Extrair os metadados do torneio para a tabela "dim_tournaments" (id, nome, tier, status, start_date, end_date, url).
+2. Realizar unpivot das colunas de colocação ("1º Lugar" até "8º Lugar") para criar a tabela "fact_tournament_placements" contendo: tournament_id, team_name, placement_rank (1 a 8).
+3. Cruzar os nomes dos times colocados com a dimensão de equipes para garantir integridade referencial de chave estrangeira (FK).
+
+```

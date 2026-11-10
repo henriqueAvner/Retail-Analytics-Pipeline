@@ -1,0 +1,20 @@
+``` text
+=== ARQUIVO: 04_pipeline_pontuacao_tier.txt ===
+ETAPA 1: SEPARAÇÃO ESTRUTURAL DA PLANILHA
+1. Identificar que a aba contém duas matrizes independentes empilhadas verticalmente.
+2. Segmentar a extração em dois DataFrames distintos:
+   - Tabela A (Regras de Pontos por Partida): Bloco de linhas superior (linhas 2 a 7).
+   - Tabela B (Regras de Pontos por Colocação Final): Bloco de linhas inferior (linhas 9 a 13).
+
+ETAPA 2: HIGIENIZAÇÃO E MODELAGEM DA TABELA DE PARTIDAS (TABELA A)
+1. Renomear colunas para snake_case ("BO1 WIN" -> "bo1_win", "BO1 LOSS" -> "bo1_loss", etc.).
+2. Normalizar a coluna "TIER" (remover prefixo "TIER " se adotado padrão unificado).
+3. Converter todos os valores de pontuação de string para INTEGER com sinal negativo.
+4. (Opcional para modelagem relacional) Fazer unpivot para o formato tabular: tier, match_format (BO1, BO3, BO5), result_type (WIN, LOSS), points.
+
+ETAPA 3: HIGIENIZAÇÃO E MODELAGEM DA TABELA DE COLOCAÇÃO (TABELA B)
+1. Renomear colunas de colocação ("1º", "2º", etc.) para formato padronizado ("rank_1", "rank_2", etc.).
+2. Converter pontuações de colocação para INTEGER.
+3. (Opcional para modelagem relacional) Fazer unpivot para o formato tabular: tier, placement_rank (1 a 6), placement_points.
+
+```
