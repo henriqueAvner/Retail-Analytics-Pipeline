@@ -10,6 +10,7 @@ ETAPA 2: TRATAMENTO E PARSING DE TIPOS
 2. Tratar a coluna "GAME TIME" (preencher com NULL onde estiver vazia ou converter para TIME/INTERVAL se houver minutagem).
 3. Converter as colunas "PTS TIME A" e "PTS TIME B" para INTEGER com suporte a valores negativos.
 4. Padronizar a coluna "RESULTADO" para indicar claramente o vencedor ("A" / "B" ou mapear para o ID da equipe vencedora).
+(feito)
 
 ETAPA 3: NORMALIZAÇÃO E INTEGRIDADE REFERENCIAL
 1. Cruzar o campo "CAMPEONATO" com a dimensão de torneios gerada a partir da aba CAMPEONATOS para substituir o texto pelo tournament_id.
