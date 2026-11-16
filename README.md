@@ -1,6 +1,6 @@
 # EPT Analytics Pipeline | Google Sheets → Python → BigQuery → Power BI
 
-> **Projeto guiado, end-to-end, para portfólio de Engenharia e Análise de Dados.** Status: especificação inicial; implementação pendente. O inventário inicial está documentado; o contrato e as regras pendentes devem ser validados antes de executar as consultas ilustrativas.
+
 
 ## Sumário
 
