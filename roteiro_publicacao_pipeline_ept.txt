@@ -1,0 +1,596 @@
+Google Sheets → Python/pandas → BigQuery → Power BI
+Registro da etapa atual: extração e transformação local dos dados de LoL.
+
+COMO USAR ESTE DOCUMENTO
+
+Este material reúne a história do projeto, explicações técnicas, sugestões de
+capturas de tela e exemplos de relações entre pandas e SQL. Pode servir como
+base para artigo, carrossel ou sequência de publicações. Os exemplos SQL são
+didáticos: não representam consultas já executadas no BigQuery.
+
+O conteúdo foi elaborado a partir do README, dos notebooks extract.ipynb,
+transform_campeonatos.ipynb, transform_pontuacao.ipynb e
+transform_partidas.ipynb, além das decisões confirmadas durante o aprendizado.
+
+1. CONTEXTO: DE UMA PLANILHA OPERACIONAL A UMA BASE ANALÍTICA
+
+O projeto utiliza dados de esports do ranking EPT: equipes, campeonatos,
+partidas, pontuações e penalidades por inatividade. O planejamento contempla
+LoL e CS2, mas a extração e os tratamentos inspecionados nesta etapa são de LoL.
+Embora o diretório do repositório se chame Retail-Analytics-Pipeline, o domínio
+implementado atualmente é esports, e não varejo.
+
+O ponto de partida foram planilhas do Google Sheets organizadas para uso
+humano: cabeçalhos dentro das linhas, colunas de torneios, separadores vazios,
+nomes abreviados, datas em texto e símbolos usados para indicar ausência.
+
+A intenção é transformar essa organização operacional em dados adequados para
+consulta e análise. O destino planejado é o BigQuery, com consumo no Power BI.
+Até aqui, o trabalho realizado está na coleta e preparação local com Python.
+Não apresentar a integração com BigQuery ou os dashboards como já concluídos.
+
+Possível abertura em primeira pessoa:
+"Estou construindo um pipeline de dados de esports, partindo de planilhas do
+Google Sheets para chegar a uma base analítica no BigQuery e a dashboards no
+Power BI. Nesta etapa, trabalhei na extração via API e na transformação com
+Python e pandas. O maior aprendizado foi perceber que cruzar tabelas exige
+entender o cadastro, além de escrever um join."
+
+PRINT SUGERIDO: recorte da planilha original mostrando campeonatos e partidas.
+Legenda: "A origem: dados organizados para operação, ainda sem um contrato
+analítico uniforme."
+
+2. EXTRAÇÃO: ACESSO PROGRAMÁTICO AO GOOGLE SHEETS
+
+No notebook src/extract/extract.ipynb, utilizamos pandas, gspread, pyarrow,
+Path e ServiceAccountCredentials, de oauth2client.service_account.
+
+Fluxo implementado:
+  a) Carregar as credenciais de uma conta de serviço a partir de um JSON local.
+  b) Declarar os escopos de acesso usados pelo código.
+  c) Autorizar o cliente com gspread.authorize(credentials).
+  d) Abrir a planilha por seu identificador, com open_by_key().
+  e) Selecionar as abas por nome, com worksheet().
+  f) Ler os valores com get_all_values().
+  g) Construir um pd.DataFrame para cada aba.
+
+As quatro abas lidas foram:
+  - PONTUAÇÃO LoL;
+  - PARTIDAS LOL;
+  - CAMPEONATOS;
+  - PONTUAÇÃO TIER.
+
+O gspread encapsula as chamadas à API: não escrevemos uma requisição HTTP
+manualmente. A autenticação identifica quem acessa; a permissão na planilha
+define se essa identidade pode ler o conteúdo. O código observado realiza
+leitura, sem implementar gravação na origem.
+
+get_all_values() entrega uma matriz de valores textuais. Portanto, os nomes de
+campos e os tipos de negócio não ficam prontos automaticamente: cabeçalhos,
+datas e números ainda precisam ser tratados na transformação.
+
+PRINT SUGERIDO: seleção das quatro abas e criação dos DataFrames, junto de
+um head() dos dados brutos. Não mostrar conteúdo do JSON de credenciais,
+chave privada ou detalhes de autenticação. Para o print do código, substituir
+o caminho real da credencial por um exemplo genérico.
+
+3. PERSISTÊNCIA DA EXTRAÇÃO EM PARQUET
+
+Os DataFrames foram organizados em um dicionário e percorridos com um laço:
+  for nome, df in dfs_dict.items():
+
+Path("arquivos_brutos") representa a pasta de saída.
+mkdir(parents=True, exist_ok=True) permite criar a pasta e seus diretórios
+necessários sem falhar apenas porque já existem.
+
+Cada DataFrame é salvo com to_parquet(), engine="pyarrow" e compression="snappy".
+Foram gerados arquivos para pontuação, partidas, campeonatos e pontuação tier.
+
+Por que separar essa etapa? A transformação pode reler a extração salva com
+read_parquet(), sem solicitar novamente os dados ao Sheets a cada experimento.
+Parquet é um formato colunar; ele preserva o esquema existente no DataFrame,
+mas não converte sozinho as datas ou números que chegaram como texto.
+
+No código atual, os nomes de arquivo são fixos. Uma nova extração substitui
+os arquivos anteriores: ainda não existe histórico de snapshots por execução.
+
+PRINT SUGERIDO: laço de exportação e os quatro arquivos na pasta de extração.
+Legenda: "Separar coleta e transformação facilita repetir os tratamentos."
+
+4. RECONSTRUÇÃO DA ESTRUTURA DAS TABELAS
+
+As leituras brutas têm uma linha que representa os cabeçalhos. Usamos:
+  df.columns = df.iloc[0]
+
+Depois retiramos essa linha da área de dados com iloc e, quando necessário,
+reset_index(drop=True). Nas partidas, o recorte inicial também pula uma linha
+vazia logo abaixo do cabeçalho.
+
+iloc seleciona por posição; loc seleciona por rótulo ou condição. O índice do
+DataFrame não deve ser confundido com a chave de negócio ou o ID da partida.
+reset_index() reorganiza o índice, mas não identifica uma entidade real.
+
+Também houve ajustes específicos de cabeçalhos na pontuação, como separar
+campos de ranking e pontos do FEMEE EPT S1. São decisões de interpretação da
+estrutura original, não apenas substituições estéticas.
+
+PRINT SUGERIDO: antes e depois do cabeçalho, com poucas colunas legíveis.
+
+5. NORMALIZAÇÃO DOS NOMES
+
+Foi construída uma função normalizar_coluna() com:
+  - str(), strip() e lower();
+  - unicodedata.normalize("NFKD", ...);
+  - remoção de caracteres combinantes;
+  - re.sub(r"[^a-z0-9]+", "_", ...);
+  - strip("_") ao final.
+
+Exemplo de resultado:
+  "Campeonato Mineiro de Esportes Eletrônicos 2026"
+  → "campeonato_mineiro_de_esportes_eletronicos_2026"
+
+A função foi usada em cabeçalhos e em valores textuais. List comprehensions
+permitiram transformar listas de nomes; Series.apply() aplicou a função a cada
+valor de uma coluna. Mais tarde também usamos DataFrame.apply() para executar
+uma operação em cada coluna selecionada dos times.
+
+Aprendizado central: os dois lados de um cruzamento precisam usar regras
+compatíveis. Inicialmente, os campeonatos preservavam acentos e as partidas
+os removiam. Para uma comparação por igualdade, isso produz textos distintos.
+
+Normalização de escrita não resolve identidade: abreviações, edições e anos
+incorretos precisam de interpretação e regras de negócio.
+
+Limitação atual: str() pode transformar ausências em textos como "nan" ou
+"<NA>". Uma evolução é preservar nulos antes de normalizar valores. Também
+convém centralizar a função em um módulo comum aos notebooks.
+
+PRINT SUGERIDO: função e dois exemplos de entrada/saída, incluindo acento.
+
+6. TRANSFORMAÇÃO DOS CAMPEONATOS
+
+No transform_campeonatos.ipynb:
+  - reconstruímos e normalizamos os cabeçalhos;
+  - removemos colunas de embeds com drop(columns=...);
+  - tratamos nomes, tier e status;
+  - convertemos início e término com pd.to_datetime(), formato %d/%m/%Y;
+  - criamos id_camp usando insert() e range(len(df_camp));
+  - selecionamos os atributos do cadastro para dim_torneios;
+  - usamos copy() para criar uma tabela independente.
+
+O ID 0 é válido: range(len(...)) começa em zero. Um ID igual a zero não deve
+ser interpretado como ausência.
+
+As colunas 1o_lugar a 8o_lugar foram transformadas em linhas com melt():
+  id_vars=["id_camp"] mantém a referência do torneio;
+  value_vars informa quais colunas virarão linhas;
+  var_name="placement_rank" recebe o nome da antiga coluna;
+  value_name="team_name" recebe seu conteúdo.
+
+O resultado passa de uma linha com várias colocações para linhas no formato
+torneio + colocação + equipe. O rótulo de posição foi convertido em inteiro
+e registros com nome vazio foram filtrados. A seleção atual de preenchidos
+não constitui, sozinha, uma validação completa de todas as formas de ausência.
+
+Saídas locais: Campeonatos.xlsx e Colocacoes_Campeonatos.xlsx.
+
+PRINT SUGERIDO: exemplo de um torneio antes e depois de melt().
+Legenda: "Colocações que estavam em colunas passam a ser registros."
+
+7. TRANSFORMAÇÃO DA PONTUAÇÃO E DIMENSÃO DE EQUIPES
+
+No transform_pontuacao.ipynb:
+  - corrigimos cabeçalhos específicos e normalizamos os nomes de colunas;
+  - convertemos ranking com vírgula decimal para float;
+  - convertemos percentual textual para fração: "71,00%" → 0.71;
+  - removemos equipes ausentes, vazias ou representadas por hífen;
+  - criamos time_id com pd.factorize(...)[0] + 1;
+  - selecionamos os atributos para dim_times.
+
+factorize() atribui códigos a valores distintos; não é uma chave permanente
+garantida entre cargas. A ordem e a composição dos dados podem mudar os IDs.
+No notebook, essa codificação ocorre antes da normalização dos nomes das
+equipes. Uma evolução é validar possíveis colisões após a normalização.
+
+Na pontuação, havia torneios distribuídos em várias colunas. Utilizamos
+startswith("pts_") e list comprehensions para separar colunas de pontos por
+partidas das demais contribuições por campeonato.
+
+Dois melt() geraram:
+  time_id + campeonato + pontos_colocacao;
+  time_id + campeonato + pontos_partidas.
+
+str.removeprefix("pts_") conciliou os nomes. Os hífens foram convertidos para
+pd.NA e pd.to_numeric() transformou as pontuações em valores numéricos.
+
+Um merge(how="outer", on=["time_id", "campeonato"], validate="one_to_one")
+reuniu os dois conjuntos sem descartar combinações presentes em apenas um lado.
+dropna(subset=[...], how="all") retirou combinações sem ambas as pontuações.
+Zero é um valor válido; ausência de pontuação não deve ser convertida em zero
+sem uma regra explícita.
+
+As saídas salvas mostram 6.690 combinações antes do filtro e 356 depois dele.
+São contagens da amostra trabalhada, não limites fixos do pipeline.
+duplicated() verificou time + campeonato; isin() verificou referências de times.
+Saídas: Times.xlsx e Pontuacao_Times.xlsx.
+
+Essa fato ainda usa rótulos abreviados de campeonatos. Não apresentar o modelo
+inteiro como já integrado por tournament_id.
+
+PRINT SUGERIDO: formato largo, saída de melt() e resultado do outer merge.
+
+8. LIMPEZA E TIPAGEM DAS PARTIDAS
+
+No transform_partidas.ipynb:
+  - recuperamos o cabeçalho e removemos a linha inicial de separação;
+  - padronizamos nomes de campos e renomeamos o formato para match_format;
+  - removemos espaços nos nomes dos times;
+  - convertemos "" e "-" em pd.NA;
+  - removemos linhas com os dois times ausentes usando dropna(how="all");
+  - geramos id_partida sequencial depois da limpeza;
+  - convertemos data com to_datetime(format="mixed", dayfirst=True);
+  - convertemos game_time para duração com to_timedelta();
+  - convertemos pontos com to_numeric(errors="coerce").astype("Int64");
+  - usamos máscaras booleanas e loc para trocar resultado A/B pelo time vencedor.
+
+Int64, com I maiúsculo, é o tipo inteiro anulável do pandas. Permite representar
+pontos inteiros e ausências. Pontos negativos de derrota foram preservados.
+errors="coerce" transforma entradas numéricas inválidas em ausência; uma
+evolução importante é contar e investigar essas conversões. Já errors="raise"
+interrompe quando a conversão encontra valores inválidos.
+
+Data e hora foram preservadas onde existentes. Não afirmar que o campo data
+foi convertido somente para DATE, pois há registros com horário.
+
+Não removemos automaticamente confrontos repetidos entre as mesmas equipes.
+Podem representar jogos diferentes: a granularidade precisa ser confirmada
+antes de deduplicar. Os 525 registros não comprovam 525 séries distintas.
+
+PRINT SUGERIDO: dtypes, exemplo do vencedor e pontos positivos/negativos.
+
+9. O CRUZAMENTO QUE EXPÔS PROBLEMAS DO CADASTRO
+
+Objetivo: substituir o nome textual do campeonato nas partidas por um ID
+existente na dimensão. Não criar outro ID para o mesmo torneio.
+
+Carregamos Campeonatos.xlsx com read_excel() no notebook de partidas. Variáveis
+de notebooks diferentes não são compartilhadas automaticamente. O arquivo
+intermediário transportou o cadastro de uma etapa para outra.
+
+Antes do merge, duplicated(keep=False) encontrou quatro registros envolvidos
+em nomes repetidos: IDs 1, 2, 20 e 21. Datas e links indicaram que os dois últimos
+eram de 2019, embora o nome dissesse 2026. A informação foi confirmada pelo
+responsável pelo projeto.
+
+Corrigimos os nomes usando um dicionário e replace(), restritos às linhas em
+que dat_inicio.dt.year.eq(2019). O filtro evitou alterar os torneios reais de
+2026 que tinham os mesmos nomes.
+
+Outra lição: corrigir df_camp depois de criar dim_torneios com copy() não atualiza
+a dimensão automaticamente. Movemos a correção para antes da criação da
+dimensão, exportamos o Excel e recarregamos o cadastro nas partidas.
+
+PRINT SUGERIDO: os quatro registros com nomes completos e datas, seguido da
+correção delimitada pelo ano. Não usar nomes truncados para demonstrar o erro.
+
+10. LEFT MERGE, CARDINALIDADE E DIAGNÓSTICO
+
+Estrutura utilizada:
+
+partidas_com_torneio = df_pts.merge(
+    dim_torneios[["id_camp", "nome_do_campeonato"]],
+    left_on="campeonato",
+    right_on="nome_do_campeonato",
+    how="left",
+    validate="many_to_one",
+    indicator=True
+)
+
+left_on/right_on: campos comparados em cada lado.
+how="left": preserva as partidas mesmo sem torneio correspondente.
+validate="many_to_one": permite várias partidas para um torneio, exigindo
+unicidade da chave de comparação na dimensão.
+indicator=True: gera _merge, que distingue correspondência e ausência.
+
+Selecionar apenas ID e nome da dimensão evita trazer atributos desnecessários
+e conflitos com colunas já existentes, como tier.
+
+O primeiro diagnóstico mostrou 458 correspondências e 96 pendências. Ao
+investigar, encontramos 28 linhas com campeonato, data e times vazios. Elas
+tinham passado pelo filtro porque texto vazio não é automaticamente um nulo.
+O ajuste também retirou uma linha de Arena GOAT com campeonato e data, mas sem
+os dois times. Após a limpeza: 525 registros, 458 correspondências e 67 pendências.
+
+value_counts(), loc e filtros booleanos ajudaram a agrupar o problema por nome,
+em vez de investigar cada partida isoladamente.
+
+PRINT SUGERIDO: código do merge e comparação das contagens antes/depois.
+Explicar a limpeza ao lado das métricas, pois o universo mudou de 554 para 525.
+
+11. MAPEAMENTO DE EQUIVALÊNCIAS DE NOMES
+
+As 67 partidas restantes foram resolvidas com um dicionário explícito de nomes.
+As equivalências foram aplicadas antes do merge com Series.replace():
+
+  sesc_geek → sesc_geek_2024
+  cmee_2025_conferencia_metropolitana
+    → campeonato_mineiro_de_esportes_eletronicos_2025_conferencia_metropolitana
+  cmee_2025_conferencia_lcq
+    → campeonato_mineiro_de_esportes_eletronicos_2025_last_chance_qualify
+  cmee_2025_conferencia_triangulo_mineiro
+    → campeonato_mineiro_de_esportes_eletronicos_2025_conferencia_triangulo
+  liga_dinoco_s → liga_dinoco_s_season_i
+  desafio_uni_lol_circuito_academico_uni_bh
+    → uni_lol_circuito_academico_uni_bh
+  arena_goat_lol → arena_goat_lol_season_ii
+
+replace() altera apenas os valores mapeados. É diferente de map(), que pode
+produzir ausências para valores não encontrados no dicionário.
+
+Não associamos torneios por similaridade automática. Comparamos nome, edição,
+datas, links disponíveis e confirmações de negócio.
+
+Casos que rendem uma boa narrativa técnica:
+  - Sesc Geek: edição confirmada pelo usuário, inclusive para partidas sem data.
+  - Metropolitana: partidas em 13 e 14/09/2025, cadastro limitado a 14/09.
+    A identidade foi confirmada; a divergência das datas ficou pendente.
+  - Uni-BH: dois candidatos com partes do nome em comum. As datas apontaram
+    para o evento de fevereiro, e não o Desafio Uni-LoL de maio.
+  - Arena GOAT: duas edições com início igual e links ausentes. As datas não
+    resolveram; o usuário confirmou que as seis partidas eram do ID 9.
+
+Sequência observada no diagnóstico, já no universo de 525 registros:
+  Inicial após limpeza: 458 encontrados / 67 pendentes
+  Após Sesc Geek:       467 encontrados / 58 pendentes
+  Após Metropolitana:   481 encontrados / 44 pendentes
+  Após LCQ:             492 encontrados / 33 pendentes
+  Após Triângulo:        497 encontrados / 28 pendentes
+  Após Liga Dinoco:      506 encontrados / 19 pendentes
+  Após Uni-BH e Arena:   525 encontrados /  0 pendentes
+
+PRINT SUGERIDO: dicionário de equivalências e comparação final de _merge.
+Legenda: "Padronizar textos não substitui entender a identidade dos eventos."
+
+12. VALIDAÇÃO E SUBSTITUIÇÃO DO TEXTO PELO ID
+
+Verificamos:
+  assert len(partidas_com_torneio) == len(df_pts)
+  assert partidas_com_torneio["id_camp"].notna().all()
+
+A primeira condição verifica preservação da quantidade de registros; a segunda,
+ausência de IDs faltantes. O validate do merge protege contra multiplicação
+por chaves repetidas no cadastro.
+
+Depois renomeamos id_camp para tournament_id, removemos campeonato,
+nome_do_campeonato e _merge, criamos uma cópia e convertemos o ID para int64.
+O nome e demais atributos continuam na dimensão, acessíveis por relacionamento.
+
+Resultado observado: 525 registros de partidas com tournament_id preenchido.
+Isso comprova cobertura do cruzamento na amostra atual; não comprova sozinho
+a correção de todos os atributos nem a qualidade completa de todo o pipeline.
+
+Os asserts foram úteis no aprendizado. Para execução operacional, condições
+críticas devem virar validações explícitas com tratamento de erro e registro,
+pois asserts podem ser desabilitados pela execução otimizada do Python.
+
+PRINT SUGERIDO: validações e tabela final com id_partida, tournament_id e data.
+
+13. PANDAS E SQL: O RACIOCÍNIO RELACIONAL EM COMUM
+
+As analogias abaixo ajudam a explicar o aprendizado, sem afirmar equivalência
+perfeita entre ferramentas, tipos e tratamento de nulos.
+
+Pandas                                      SQL / ideia equivalente
+df[["id", "nome"]]                         SELECT id, nome
+df.loc[condicao]                            WHERE condicao
+rename(columns={"id_camp":"tournament_id"}) SELECT id_camp AS tournament_id
+sort_values("data")                        ORDER BY data
+drop_duplicates()                          SELECT DISTINCT
+value_counts()                             GROUP BY ... + COUNT(*)
+merge(how="left")                          LEFT JOIN
+merge(how="outer")                         FULL OUTER JOIN
+melt()                                     UNPIVOT
+loc[mascara, "resultado"] = ...             CASE WHEN, em uma projeção
+isin(lista)                                IN ou EXISTS, conforme o uso
+duplicated(keep=False)                      COUNT(*) OVER(PARTITION BY ...)>1
+to_numeric()/astype()                       CAST; conversão tolerante: SAFE_CAST
+notna()/isna()                              IS NOT NULL / IS NULL
+str.strip()/str.lower()                     TRIM() / LOWER()
+replace(dicionario)                         CASE ou JOIN com tabela de aliases
+
+Exemplo 1 — buscar o torneio preservando todas as partidas:
+
+SELECT
+  p.id_partida,
+  p.data,
+  t.id_camp AS tournament_id
+FROM partidas AS p
+LEFT JOIN dim_torneios AS t
+  ON p.campeonato = t.nome_do_campeonato;
+
+O JOIN SQL também pode multiplicar linhas se houver duas correspondências.
+validate="many_to_one" não é um argumento de SQL: essa regra precisa ser
+verificada em uma consulta de qualidade ou camada de validação.
+
+Exemplo 2 — encontrar nomes repetidos no cadastro:
+
+SELECT nome_do_campeonato, COUNT(*) AS quantidade
+FROM dim_torneios
+GROUP BY nome_do_campeonato
+HAVING COUNT(*) > 1;
+
+Exemplo 3 — diagnosticar partidas sem torneio:
+
+SELECT p.campeonato, COUNT(*) AS quantidade
+FROM partidas AS p
+LEFT JOIN dim_torneios AS t
+  ON p.campeonato = t.nome_do_campeonato
+WHERE t.id_camp IS NULL
+GROUP BY p.campeonato;
+
+Exemplo 4 — converter resultado A/B em vencedor:
+
+SELECT
+  CASE
+    WHEN resultado = 'A' THEN time_a
+    WHEN resultado = 'B' THEN time_b
+    ELSE resultado
+  END AS vencedor
+FROM partidas;
+
+Exemplo 5 — remover linhas sem ambos os times:
+
+SELECT *
+FROM partidas
+WHERE NULLIF(TRIM(time_a), '') IS NOT NULL
+   OR NULLIF(TRIM(time_b), '') IS NOT NULL;
+
+Esse exemplo pressupõe que os hífens já foram tratados. O OR preserva a linha
+se ao menos um time estiver preenchido, como dropna(..., how="all").
+
+Exemplo 6 — formato largo para longo, em sintaxe ilustrativa de BigQuery:
+
+SELECT id_camp, placement_label, team_name
+FROM colocacoes_largas
+UNPIVOT INCLUDE NULLS (
+  team_name FOR placement_label IN (primeiro_lugar, segundo_lugar)
+);
+
+Os nomes de coluna acima são ilustrativos. INCLUDE NULLS aproxima o exemplo
+do melt(), que mantém valores ausentes antes de filtragem explícita.
+
+Cuidado conceitual: pandas.merge pode corresponder chaves nulas entre si,
+enquanto igualdade SQL comum não considera NULL = NULL verdadeiro. Por isso,
+validar ausências nas chaves continua necessário ao migrar a lógica.
+
+Outro cuidado: pandas.merge é um cruzamento de tabelas, comparável a JOIN.
+O comando MERGE do BigQuery é uma operação de DML para inserir, atualizar ou
+excluir registros conforme correspondências. São conceitos diferentes.
+
+PRINT SUGERIDO: merge e LEFT JOIN lado a lado, mais o diagnóstico com HAVING.
+
+14. MODELO ANALÍTICO EM CONSTRUÇÃO
+
+As dimensões descrevem entidades; as tabelas de fatos registram eventos ou
+medidas em uma granularidade definida. No projeto atual temos:
+  - dim_torneios: identificação e atributos do torneio;
+  - dim_times: identificação e atributos das equipes;
+  - colocações: torneio + posição + equipe, ainda com equipe textual;
+  - fato_participacoes: time + rótulo de campeonato + pontuações;
+  - partidas: registros com tournament_id, equipes ainda textuais.
+
+O próximo passo autorizado no aprendizado será relacionar time_a e time_b à
+dimensão de equipes, em dois cruzamentos. Depois será necessário definir como
+representar a equipe vencedora e validar os relacionamentos restantes.
+
+O modelo ainda não é um esquema estrela finalizado. Na futura camada semântica,
+os papéis das equipes A, B e vencedora precisam ser tratados para evitar
+relacionamentos ambíguos. Ranking atual é uma medida de estado; não se deve
+somá-lo indiscriminadamente nem inventar histórico sem snapshots.
+
+15. EVOLUÇÃO PREVISTA: BIGQUERY E POWER BI
+
+Fluxo pretendido:
+  Google Sheets → extração Python → Parquet bruto → transformação/validação
+  → BigQuery → consultas e modelo analítico → dashboards Power BI.
+
+Antes de publicar no BigQuery:
+  - concluir IDs e relacionamentos;
+  - documentar esquema, granularidade e regras de ausência;
+  - corrigir ou registrar pendências de datas e aliases;
+  - definir estabilidade de IDs entre cargas;
+  - mover a lógica validada para funções/módulos reutilizáveis;
+  - incluir metadados de origem, execução e contagens;
+  - configurar a carga e validar o esquema no destino.
+
+Atualmente range() e factorize() dependem da composição/ordem dos dados.
+Precisaremos de estratégia persistente de identidade antes de depender desses
+IDs em cargas recorrentes, especialmente se tabelas forem atualizadas em
+momentos diferentes. Não chamar esses IDs de estáveis ou o pipeline de
+idempotente sem implementar e testar essa propriedade.
+
+No BigQuery, a intenção é organizar tabelas de preparação, dimensões, fatos
+e consultas analíticas. No Power BI, possíveis visões incluem desempenho por
+equipe, campeonato e formato, composição dos pontos e qualidade dos dados.
+São objetivos futuros; não há dashboards implementados demonstrados aqui.
+
+A aba PONTUAÇÃO TIER foi extraída, mas seu tratamento em duas matrizes de regras
+ainda está descrito nos arquivos de passos. Não apresentar esse tratamento
+como já implementado. CS2 também deve ser apresentado como expansão planejada.
+
+PRINT FUTURO: arquitetura planejada com indicação visual do que está pronto.
+
+16. SUGESTÃO DE SEQUÊNCIA PARA A PUBLICAÇÃO
+
+Opção de título:
+"Do Google Sheets ao modelo analítico: o que aprendi preparando dados de esports"
+
+Sequência sugerida de 8 imagens:
+  1. Contexto: planilha original e objetivo Google Sheets → BigQuery → Power BI.
+  2. Extração: gspread, quatro abas e persistência em Parquet.
+  3. Limpeza: cabeçalhos, nulos, datas, tipos e pontos negativos.
+  4. Remodelagem: antes/depois do melt e analogia com UNPIVOT.
+  5. Qualidade: qualificatórias de 2019 cadastradas com nome de 2026.
+  6. Cruzamento: left merge, cardinalidade e paralelo com LEFT JOIN.
+  7. Investigação: aliases, ambiguidade da Arena GOAT e confirmação de negócio.
+  8. Resultado: 525 referências resolvidas e próximos passos declarados.
+
+Para imagens legíveis, selecionar poucas colunas e poucas linhas. Use:
+  with pd.option_context("display.max_colwidth", None):
+      display(tabela_selecionada)
+
+O contexto altera somente a exibição temporária. Para comparar antes/depois,
+preservar amostras das etapas; não apresentar a tabela já corrigida como se
+fosse o estado original. Usar dados e saídas realmente executados.
+
+17. TEXTO-BASE EM PRIMEIRA PESSOA
+
+"Estou desenvolvendo um projeto de Engenharia de Dados com informações de
+esports, partindo do Google Sheets e planejando chegar ao BigQuery e Power BI.
+
+Nesta etapa, implementei a extração de quatro abas usando Python e gspread,
+salvei os dados brutos em Parquet e trabalhei os tratamentos com pandas.
+Reorganizei cabeçalhos, padronizei textos, converti tipos e transformei
+colunas de campeonatos e colocações em registros usando melt().
+
+Uma parte especialmente útil foi conectar o que aprendi em pandas ao SQL:
+merge com LEFT JOIN, melt com UNPIVOT e filtros booleanos com WHERE.
+
+Ao relacionar partidas e torneios, encontrei nomes abreviados, linhas vazias
+e qualificatórias de 2019 cadastradas com 2026 no nome. Também houve eventos
+que não podiam ser distinguidos apenas pela data. Foi necessário investigar
+o cadastro e confirmar o significado dos registros antes de definir os IDs.
+
+Depois da limpeza e das equivalências confirmadas, os 525 registros de
+partidas da amostra passaram a encontrar seu torneio, sem perda de linhas
+durante o cruzamento. Validei a cardinalidade e a ausência de IDs faltantes
+antes de substituir os nomes por tournament_id.
+
+O projeto continua em construção. Os próximos passos são concluir os
+relacionamentos com as equipes, preparar a carga no BigQuery e construir
+dashboards no Power BI."
+
+18. LIMITES E MELHORIAS QUE VALEM SER MENCIONADOS
+
+O resultado atual foi validado nos notebooks, mas ainda não representa um
+pipeline operacional automatizado. Os caminhos dependem do diretório de
+execução; reexecutar células fora de ordem pode produzir estados inconsistentes.
+Reiniciar o kernel e executar desde a leitura bruta ajuda a conferir o fluxo.
+
+O Excel é uma ponte local de inspeção e compartilhamento entre notebooks,
+não o destino final planejado. Salvar uma tabela em Excel não conserva todas
+as propriedades de tipo e governança de um banco analítico.
+
+Uma tabela persistente de aliases, com origem, motivo e confirmação, tornará
+o mapeamento mais auditável que um dicionário isolado. As correções de 2019,
+da Metropolitana e da Arena GOAT merecem registro de decisão e pendência.
+
+O README ainda apresenta parte do projeto como especificação inicial e contém
+o termo "Google Sheets LoLPI"; na publicação, usar "Google Sheets API". A
+documentação deverá ser atualizada para refletir o progresso real, sem
+apresentar requisitos planejados como funcionalidades concluídas.
+
+Uma boa mensagem técnica para a publicação:
+"Uma correspondência de texto pode estar correta para o código e errada para
+o negócio. O join só se torna confiável quando as chaves e as regras de
+identificação também foram investigadas."
