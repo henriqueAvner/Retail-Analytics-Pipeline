@@ -1,70 +1,141 @@
-# Tarefas — dashboards EPT no Power BI
+# EPT LoL no Power BI
 
-Este roteiro é para você construir um relatório com **três páginas analíticas**, usando os dados tratados do projeto de esports. Uma página adicional de regras é opcional. Os nomes de tabelas do modelo abaixo são sugestões: confira os campos reais depois de importar. A ordem respeita a preparação, a modelagem, os indicadores e, por fim, os visuais. Marque cada caixa quando terminar e guarde evidências das conferências.
+O relatório terá três páginas principais — **Ranking e contribuição de pontos**, **Partidas e desempenho** e **Campeonatos e colocações**. A página **Regras e conferência** documenta a pontuação e permite auditar a cobertura dos dados.
 
-## 1. Ponto de partida e limites
+## 1. Conferir as consultas já abertas
 
-Inventário dos arquivos Excel encontrados em `src/transform/excel_transform` na análise de 17/11/2026. As contagens são uma fotografia dos arquivos locais e devem ser conferidas após uma nova execução.
+Use as tabelas que você já trouxe do dataset `femeeproject.femeeData`. O [notebook de carga](src/load/load_GBQ.ipynb) lê os Excels tratados e publica os DataFrames com os nomes abaixo, sem declarar um esquema explícito. Os campos e as contagens vêm dos arquivos locais. Confirme na prévia do Power Query os nomes, tipos e valores da sua carga.
 
-| Arquivo | Campos relevantes | Grão / situação observada |
+| Consulta BigQuery | O que cada linha representa | Campos esperados | Referência local |
+|---|---|---|---:|
+| `Times` | Uma equipe com o ranking atual | `time_id`, `nome_da_equipe`, `ranking_atual_automatico`, `ranking_base`, `penalidade_inatividade` | 224 |
+| `Campeonatos` | Um campeonato ou edição cadastrada | `id_camp`, `nome_do_campeonato`, `tier`, `status`, `link`, `dat_inicio`, `dat_termino` | 34 |
+| `Partidas` | Um registro identificado por `match_id` | `match_id`, `data`, `tier`, `stage`, `game_time`, `match_format`, `pts_time_a`, `pts_time_b`, `tournament_id`, `team_a_id`, `team_b_id`, `winner_team_id` | 525 |
+| `Colocacoes_Campeonatos` | Uma posição preenchida em um campeonato | `id_camp`, `placement_rank`, `team_name` | 201 |
+| `Pontuacao_Times` | Pontos de uma equipe por rótulo de evento | `time_id`, `campeonato`, `pontos_colocacao`, `pontos_partidas` | 356 |
+| `Tier_Pontuacao` | Uma regra de pontos por tier, formato e resultado | `tier`, `formato` (ex. `bo3_win`), `pontos` | 30 |
+| `Tier_Colocacao` | Uma regra de pontos por tier e posição | `tier`, `colocacao` (ex. `1º lugar`), `pontos` | 32 |
+
+- [ ] **T01 — Conferir a navegação e o perfil das sete consultas.** Mantenha os nomes da tabela acima para usar o DAX deste guia. Como a origem já entrega tabelas com cabeçalhos, comece pela etapa de navegação existente. Em **Exibir**, habilite qualidade e perfil de coluna e selecione o perfil do conjunto inteiro. Registre a data da carga, as contagens, os nulos e os erros por consulta. Use **Referência** para criar verificações auxiliares e desabilite a carga delas quando servirem apenas para conferência. [Perfil e tipos no Power Query](https://learn.microsoft.com/power-query/common-issues)
+- [ ] **T02 — Ajustar tipos e campos para o relatório.** Use número inteiro para IDs, `placement_rank` e pontos inteiros após conferir se a conversão preserva os valores. `id_camp = 0` é válido. Use decimal para ranking atual, ranking base, penalidade e `game_time`. A penalidade é fração, então 0,71 deve aparecer como 71%. O [tratamento de partidas](src/transform/transform_partidas.ipynb) grava `game_time` em minutos decimais. Só leve duração aos visuais se a cobertura for suficiente e exibida. Preserve nulos, zeros e pontos negativos. Inspecione colunas extras na sua carga e remova apenas as confirmadas como descartáveis.
+- [ ] **T03 — Criar campos de filtro.** Em `Partidas`, crie `DataPartida` como **Data**, com o dia do evento e a coluna `data` original preservada. Se a origem vier com fuso horário, confirme a data de negócio antes de extrair o dia. Trate `dat_inicio` e `dat_termino` como datas. Padronize o tier em S, A, B, C e D nas consultas que o contêm. Em `Tier_Pontuacao`, divida `formato` pelo sublinhado em `FormatoRegra` e `ResultadoRegra` (ex. `BO3` e `win`). Em `Tier_Colocacao`, extraia o número antes de `º` como `PosicaoRegra`, inteira. Verifique que `tier + FormatoRegra + ResultadoRegra` e `tier + PosicaoRegra` são chaves únicas.
+
+## 2. Validar e completar os vínculos
+
+- [ ] **T04 — Conferir chaves antes de criar relações.** Use **Agrupar por → Contar linhas** para testar unicidade e filtre os nulos separadamente. Confira `Times[time_id]`, `Campeonatos[id_camp]`, `Partidas[match_id]`, o par `id_camp + placement_rank` das colocações e o par `time_id + campeonato` da pontuação. Use **Mesclar consultas como novas → Anti esquerda** para listar chaves sem cadastro. Verifique `Partidas[tournament_id]` e `Colocacoes_Campeonatos[id_camp]` contra campeonatos, e `team_a_id`, `team_b_id`, `winner_team_id` e `Pontuacao_Times[time_id]` contra times. Nos registros de partida, confira se A e B são equipes distintas e se o vencedor é um dos lados. Investigue duplicatas, órfãos e divergências antes de incluir os registros nos indicadores que dependem dessas chaves. [Tipos de junção no Power Query](https://learn.microsoft.com/en-us/power-query/merge-queries-overview)
+- [ ] **T05 — Mapear os rótulos de evento.** Na amostra local, os 29 rótulos distintos de `Pontuacao_Times[campeonato]` têm zero correspondências exatas com `Campeonatos[nome_do_campeonato]`. Crie uma consulta auxiliar com `rotulo_origem`, `edicao_confirmada` e `evidencia`. Valide abreviações como `cmee_18` pela edição e pela data na origem. Resolva a edição cadastrada ao `id_camp` da carga atual e mescle por correspondência exata com **Externa esquerda**. Quando um rótulo for ambíguo, investigue se a origem oferece campos para resolver a edição. Mantenha a chave vazia enquanto a associação estiver pendente. Compare o número de linhas e as somas antes e depois de expandir a chave.
+- [ ] **T06 — Mapear as equipes das colocações.** Compare `team_name` com `nome_da_equipe` após normalizar caixa e espaços, preservando os nomes originais. Dos 123 nomes distintos da amostra, 98 coincidem exatamente antes desse tratamento. Revise os demais com uma tabela de aliases e evidências. Se um alias representar equipes diferentes conforme edição ou ano, use esse contexto no mapeamento. Resolva a equipe cadastrada ao `time_id` atual, faça uma mesclagem externa esquerda e expanda a chave. Cada linha deve encontrar no máximo uma equipe. Registre quantas linhas e quantos nomes ficaram pendentes.
+- [ ] **T07 — Criar `Partida_Equipe` com Referência e Acrescentar.** A partir de `Partidas`, crie duas consultas de referência, uma para cada lado. Preserve `match_id`, `tournament_id`, `DataPartida`, `match_format`, `stage` e `winner_team_id` em ambas. Renomeie as colunas conforme o quadro e acrescente as duas consultas em uma nova. Desabilite a carga das referências intermediárias. Use somente participações com dois IDs de equipe válidos e distintos. Classifique `ResultadoEquipe` como **Vitória** ou **Derrota** apenas quando o vencedor for um dos participantes. Use **Indefinido** quando não houver vencedor válido e **Empate** somente se houver evidência explícita de empate. Confira duas linhas por partida com participantes válidos e uma linha por par `match_id + time_id`.
+
+| Campo em `Partida_Equipe` | Referência lado A | Referência lado B |
 |---|---|---|
-| `campeonatos/Campeonatos.xlsx` | `id_camp`, `nome_do_campeonato`, `tier`, `status`, `dat_inicio`, `dat_termino` | 34 campeonatos; cadastro para descrição e filtros. |
-| `campeonatos/Colocacoes_Campeonatos.xlsx` | `id_camp`, `placement_rank`, `team_name` | 201 registros de campeonato e colocação; equipe ainda é texto. |
-| `partidas/Resultado_Partidas.xlsx` | `match_id`, `data`, `tier`, `stage`, `match_format`, `pts_time_a`, `pts_time_b`, `tournament_id`, `team_a_id`, `team_b_id`, `winner_team_id` | 525 registros. IDs de equipe e vencedor estão preenchidos no Excel inspecionado, mas isso não comprova por si só a identidade correta. `Unnamed: 1` está inteiramente vazia; `game_time` tem 460 ausências. |
-| `times/Times.xlsx` | `time_id`, `nome_da_equipe`, `ranking_atual_automatico`, `ranking_base`, `penalidade_inatividade` | 224 equipes; uma linha tem indicadores de ranking ausentes. O ranking é estado atual. |
-| `times/Pontuacao_Times.xlsx` | `time_id`, `campeonato`, `pontos_colocacao`, `pontos_partidas` | 356 combinações de time e rótulo de campeonato; o rótulo ainda não é `id_camp`. Existem ausências nas duas colunas de pontos. |
+| `time_id` | `team_a_id` | `team_b_id` |
+| `adversario_id` | `team_b_id` | `team_a_id` |
+| `PontosEquipe` | `pts_time_a` | `pts_time_b` |
+| `Lado` | A | B |
 
-O notebook `transform_pontuacao_tier.ipynb` já contém unpivot de `df_colocacao` e `df_pontuacao`, mas ainda não contém exportação dos dois resultados. No segundo, `formato` contém valores compostos como `bo1_win`, não apenas BO1. Os resultados do notebook e os Excels podem divergir se não forem exportados novamente. O foco inicial é LoL; não apresentar CS2 como implementado. O README e o roteiro também descrevem arquitetura futura e podem estar desatualizados em relação aos notebooks.
+Para o detalhe da página de partidas, expanda o nome do adversário com uma mesclagem externa esquerda com `Times` pelo ID. Na amostra, o `match_id = 2` tem 0 ponto dos dois lados e vencedor com ID 2. Use esse caso para testar a classificação pelo vencedor.
 
-## 2. Preparar os dados
+## 3. Montar o modelo
 
-- [ ] **T01 — Reexecutar e inventariar as saídas.** Execute os notebooks na ordem necessária, confirme que cada Excel corresponde à execução recente e anote data de extração, origem, quantidade de linhas, colunas e tipos. Não assuma que as saídas salvas refletem células editadas posteriormente. **Pronto quando:** os cinco arquivos forem lidos sem erro e o inventário puder ser reproduzido.
-- [ ] **T02 — Exportar as duas tabelas de regras.** Conclua e exporte `df_colocacao_long` como `Regras_Colocacao.xlsx` (`tier`, `colocacao`, `pontos`) e `df_pontuacao_long` como `Regras_Partida.xlsx`. Nesta última, separe `bo1_win` em `formato = BO1` e `resultado = win`, mantendo `tier` e `pontos`. Padronize `tier` como S, A, B, C ou D e converta colocação em número. Registre modalidade e referência temporal/versão quando disponíveis. **Pronto quando:** cada combinação de chave é única e, com a amostra atual, há 32 regras de colocação e 30 de partida; S/1 = 100, S/BO3/win = 15, S/BO3/loss = -15. Não invente regra de colocação para D.
-- [ ] **T03 — Conferir integridade dos IDs.** Verifique unicidade de `Times[time_id]`, `Campeonatos[id_camp]` e `Resultado_Partidas[match_id]`; compare `tournament_id` com `id_camp` e os três IDs de equipe com `time_id`. Verifique se o vencedor é um dos dois times e investigue divergências com os nomes/pendências da origem. Preserve zeros e pontos negativos. **Pronto quando:** houver relatório de faltantes, duplicados e divergências, com resolução ou ressalva registrada.
-- [ ] **T04 — Resolver os vínculos que ainda são texto.** Para `Pontuacao_Times[campeonato]`, mantenha uma tabela auditável de equivalências para `id_camp`, conferindo edição e data antes de associar; não associe apenas por semelhança. Para `Colocacoes_Campeonatos[team_name]`, mapeie equipe para `time_id`, com aliases explícitos. Conserve originais e registre não correspondidos. **Pronto quando:** as chaves candidatas forem únicas, o cruzamento não multiplicar linhas e a cobertura e as exceções estiverem documentadas. Até então, visuais dependentes desses filtros ficam limitados.
-- [ ] **T05 — Registrar conceitos e estabilidade.** Confirme o significado de cada coluna de pontos de evento, ranking base, penalidade e a granularidade dos registros de partidas. Defina uma estratégia persistente para IDs antes de atualizar tabelas separadamente: `factorize` e IDs sequenciais podem mudar conforme ordem/composição. **Pronto quando:** existir dicionário com grão, tipo, regra, nulo e chave por tabela; comparações entre cargas comprovem estabilidade ou o risco esteja explícito.
+- [ ] **T08 — Aplicar as consultas e configurar as relações.** Em **Fechar e aplicar**, carregue as tabelas finais. Na vista **Modelo**, confira as relações detectadas automaticamente. Use relações ativas de **um para muitos**, com filtro em uma direção, da primeira para a segunda coluna da matriz abaixo. Os IDs devem ter o mesmo tipo nas duas pontas. [Relações no Power BI Desktop](https://learn.microsoft.com/power-bi/transform-model/desktop-relationships-understand)
 
-## 3. Escolher e conectar a origem
+| Lado 1 | Lado muitos | Quando ligar |
+|---|---|---|
+| `Campeonatos[id_camp]` | `Partidas[tournament_id]` | Após T04 |
+| `Campeonatos[id_camp]` | `Colocacoes_Campeonatos[id_camp]` | Após T04 |
+| `Campeonatos[id_camp]` | `Partida_Equipe[tournament_id]` | Após T07 |
+| `Times[time_id]` | `Pontuacao_Times[time_id]` | Após T04 |
+| `Times[time_id]` | `Partida_Equipe[time_id]` | Após T07 |
+| `Campeonatos[id_camp]` | `Pontuacao_Times[id_camp]` | Após T05, para linhas mapeadas |
+| `Times[time_id]` | `Colocacoes_Campeonatos[time_id]` | Após T06, para linhas mapeadas |
+| `CalendarioPartidas[Data]` | `Partidas[DataPartida]` e `Partida_Equipe[DataPartida]` | Uma relação por tabela após T09 |
 
-- [ ] **T06 — Escolher um caminho inicial.** Para aprender e validar localmente, use Excel com modo Importação. Para a arquitetura planejada, publique as mesmas tabelas e tipos no BigQuery e conecte o Power BI ao conjunto tratado. Escolha uma origem por tabela para o modelo principal; não carregue Excel e banco simultaneamente como fatos duplicados. **Pronto quando:** a origem, o caminho/projeto e a data da carga estiverem registrados.
-- [ ] **T07A — Caminho Excel.** No Desktop, use **Obter dados > Pasta de trabalho do Excel > Transformar dados**, selecionando `Sheet1` ou a tabela correta em cada arquivo. Mantenha caminhos acessíveis, teste atualização após reexportar e considere que atualização no serviço de arquivos locais exige configuração apropriada de gateway ou armazenamento acessível. **Pronto quando:** atualizar reproduzir as mesmas linhas e tipos esperados.
-- [ ] **T07B — Caminho banco em nuvem.** Se escolher BigQuery, crie dataset e tabelas com esquema explícito, carregue os sete conjuntos após os dois novos exports e valide linhas, tipos e nulos. Configure projeto, região, permissões e custos; conecte pelo conector do BigQuery com conta autorizada. Comece com Importação e compare com DirectQuery apenas após verificar suporte e necessidade. Se escolher outro banco, adapte conexão e carga ao fornecedor. **Pronto quando:** contagens e amostras do banco coincidirem com a origem e a atualização funcionar com as credenciais corretas.
-- [ ] **T08 — Inspecionar no Power Query.** Nomeie consultas, remova a coluna vazia `Unnamed: 1` se continuar vazia, confira cabeçalhos e tipos, datas, decimais e nulos. IDs e pontos inteiros, penalidade decimal e datas como data/data-hora conforme origem; `game_time` exige inspeção antes de usar. Não repita tratamentos de negócio já feitos no Python. Use **Fechar e aplicar**. **Pronto quando:** não houver erros de tipo e uma atualização repetir os passos.
+Use `Partida_Equipe` como origem dos visuais que precisam responder à segmentação de equipe, formato, fase e lado. As tabelas de regras podem compartilhar uma dimensão `DimTierRegra` com uma linha para cada tier (S a D) para filtrar as duas matrizes. O tier das páginas de competição vem de `Campeonatos`. Compare com o tier registrado em `Partidas` se houver divergência.
 
-## 4. Modelo e medidas
+- [ ] **T09 — Criar o calendário das partidas.** Gere uma tabela com datas contínuas entre a menor e a maior `DataPartida` válida. Use `Data` única e sem horário, crie ano, mês e ano-mês e ordene o rótulo pelo valor cronológico. Marque a tabela como calendário e crie as duas relações indicadas. Use filtros de período somente para registros de partidas. Para uma série de campeonatos iniciados, crie um calendário próprio ligado a `dat_inicio`. O ranking tem uma única fotografia da fonte e os pontos por rótulo têm o grão de evento.
 
-- [ ] **T09 — Criar relacionamentos verificáveis.** Na vista Modelo, comece com `Times[time_id]` 1 → * `Pontuacao_Times[time_id]` e `Campeonatos[id_camp]` 1 → * `Resultado_Partidas[tournament_id]` e `Colocacoes_Campeonatos[id_camp]`. Use filtro unidirecional da dimensão para a fato; confira tipos e unicidade do lado 1. Só ligue participações a campeonatos e colocações a times após T04. Não use muitos-para-muitos para esconder chaves não resolvidas. **Pronto quando:** um filtro de campeonato afetar as partidas e colocações esperadas e os totais baterem com a origem.
-- [ ] **T10 — Tratar os papéis de equipe nas partidas.** Para desempenho por equipe, prepare preferencialmente uma fato `Partida_Equipe`, com uma linha por `match_id` e equipe participante: `time_id`, adversário, papel A/B, pontos do respectivo lado, resultado e `tournament_id`. Preserve `Resultado_Partidas` para contagem de registros únicos; a nova fato tem normalmente duas linhas por partida completa. Valide ambos os lados e vencedores antes de calcular vitórias e derrotas. Uma alternativa é usar dimensões de equipe por papel, mas elas exigem filtros e medidas específicos; não crie relações ativas ambíguas. **Pronto quando:** cada partida completa aparecer duas vezes na nova fato e um filtro de time mostrar jogos como A e como B sem duplicar contagem de partidas.
-- [ ] **T11 — Datas e regras.** Crie calendário com datas únicas abrangendo as datas válidas de partidas; relacione data sem horário à data do calendário, preservando a data/hora original. Datas ausentes permanecem sem período. Para as regras, não relacione duas tabelas diretamente por `tier` repetido: use uma dimensão de tier com chave única ou mantenha-as independentes para consulta. Padronize `tier_s` e `S`. Caso haja modalidades/versões, inclua essas chaves na resolução das regras. **Pronto quando:** filtros afetarem somente fatos vinculados e resultados forem testados.
-- [ ] **T12 — Criar medidas simples e validar contexto.** Em **Modelagem > Nova medida**, adapte nomes aos dados carregados. Exemplo: `Registros de partidas = DISTINCTCOUNT(Resultado_Partidas[match_id])`; `Campeonatos = DISTINCTCOUNT(Campeonatos[id_camp])`; `Pontos por partida = SUM(Pontuacao_Times[pontos_partidas])`; `Pontos por colocação = SUM(Pontuacao_Times[pontos_colocacao])`. Crie vitórias e derrotas na fato por equipe só após T10; use `DIVIDE(vitórias, vitórias + derrotas)` para taxa de vitória entre resultados válidos. Teste total e seleção de uma equipe manualmente. **Pronto quando:** totais, unidades e comportamento com filtros estiverem conferidos.
-- [ ] **T13 — Tratar ranking como estado.** Use `ranking_atual_automatico` de `Times` para ordenar/exibir cada equipe, sem somá-lo ao longo do tempo e sem inventar histórico. Confirme desempate antes de calcular posição. Não some pontos de `Pontuacao_Times` com `pts_time_a/b` como se fossem fontes independentes: podem representar o mesmo resultado em grãos diferentes. Não chame esses pontos de ranking atual sem reconciliar fórmula e contexto. Penalidade LoL já é fração decimal: 0,71 = 71%; não dividir novamente por 100. **Pronto quando:** os números exibidos coincidirem com a fonte e as limitações estiverem visíveis.
+## 4. Criar as medidas
 
-## 5. Construir os três dashboards
+- [ ] **T10 — Criar uma medida por definição abaixo.** Os exemplos usam vírgula como separador. Ajuste ao padrão do Desktop se ele estiver configurado para usar ponto e vírgula.
 
-Cada página abaixo é um dashboard no sentido de **página de relatório** no Desktop. Se quiser um dashboard do Power BI Service, ele é montado posteriormente fixando visuais de relatórios. Cada visual deve ter título, campos, medida, filtros e um teste documentado.
+```dax
+Equipes cadastradas = DISTINCTCOUNT(Times[time_id])
+Campeonatos cadastrados = DISTINCTCOUNT(Campeonatos[id_camp])
+Registros na origem = DISTINCTCOUNT(Partidas[match_id])
+Registros com equipes válidas = DISTINCTCOUNT(Partida_Equipe[match_id])
+Participações em partidas = COUNTROWS(Partida_Equipe)
 
-- [ ] **T14 — Página 1: Ranking e equipes.** Perguntas: quem lidera o ranking atual? Quais contribuições por evento aparecem para a equipe? Adicione tabela com `nome_da_equipe`, ranking atual e penalidade; barras horizontais Top N por ranking, com indicação da amostra; cartões de equipes e campeonatos, quando filtráveis; matriz de pontos por equipe e rótulo de campeonato com medidas de T12. Filtro de equipe é viável pelo ID; filtre campeonato na matriz inicialmente pelo rótulo da própria fato. **Dependências:** T04 para usar a dimensão de campeonato na fato; T10 para filtrar desempenho em partidas por equipe; não aplicar filtro de data ao ranking de estado como se existisse histórico. **Aceite:** selecionar uma equipe e conferir ranking e uma contribuição de evento contra os Excels; não tratar nulo como zero automaticamente.
-- [ ] **T15 — Página 2: Partidas e desempenho.** Perguntas: quantos registros existem por campeonato, formato e período? Como uma equipe se saiu? Crie cartões de registros, vitórias, derrotas e taxa entre resultados válidos; barras por `match_format`, gráfico temporal por data válida, matriz por campeonato e formato e tabela detalhada. Filtros: campeonato, formato e data; time somente após T10. **Dependências:** calendário para série temporal; fato por equipe para vitórias e taxa. Identifique os valores como registros de partida, não séries, enquanto o grão não estiver confirmado. Dados sem data ficam fora dos períodos datados. **Aceite:** comparar um campeonato e um time nos dados de origem; validar que partidas como A e B entram no resultado e que empate/resultado desconhecido não vira derrota.
-- [ ] **T16 — Página 3: Campeonatos e colocações.** Perguntas: quais torneios existem, quais são seus tiers e quem aparece no pódio? Use cartões de campeonatos, matriz de `nome_do_campeonato` por `placement_rank` com `team_name`, barras por tier/status e uma tabela com datas. Filtros: tier, status e campeonato; equipe por texto na própria tabela até T04. Se mostrar distribuição temporal de campeonatos, use explicitamente data de início e relação de data apropriada. **Dependências:** T04 para análise integrada por equipe; não presumir que classificação textual já está ligada à dimensão Times. **Aceite:** conferir três colocações de um campeonato com a planilha e confirmar que um filtro não altera visuais sem relação válida.
-- [ ] **T17 — Página opcional: Regras de pontuação.** Mostre duas matrizes independentes: tier × colocação → pontos e tier × formato/resultado → pontos. Use as tabelas de T02; informe ausência de regra D por colocação como ausente, não zero. Regras são tabelas de referência, não fatos para somar ao desempenho. **Aceite:** conferir os exemplos de T02, incluindo derrota negativa.
+Vitórias = CALCULATE(
+    [Participações em partidas],
+    KEEPFILTERS(Partida_Equipe[ResultadoEquipe] = "Vitória")
+)
+Derrotas = CALCULATE(
+    [Participações em partidas],
+    KEEPFILTERS(Partida_Equipe[ResultadoEquipe] = "Derrota")
+)
+Taxa de vitória da equipe = IF(
+    HASONEVALUE(Times[time_id]),
+    DIVIDE([Vitórias], [Vitórias] + [Derrotas])
+)
 
-## 6. Acabamento, validação e entrega
+Pontos de partidas por evento = SUM(Pontuacao_Times[pontos_partidas])
+Pontos de colocação por evento = SUM(Pontuacao_Times[pontos_colocacao])
+Pontos registrados em partidas = SUM(Partida_Equipe[PontosEquipe])
+Colocações registradas = COUNTROWS(Colocacoes_Campeonatos)
+Títulos registrados = CALCULATE(
+    DISTINCTCOUNT(Colocacoes_Campeonatos[id_camp]),
+    KEEPFILTERS(Colocacoes_Campeonatos[placement_rank] = 1)
+)
+Registros sem data = CALCULATE(
+    [Registros na origem],
+    KEEPFILTERS(ISBLANK(Partidas[DataPartida]))
+)
+```
 
-- [ ] **T18 — Aplicar os recursos estudados.** Use cartões, barras, matriz, segmentações, Top N, formatação numérica e interações entre visuais; confira em **Editar interações** se cada seleção filtra o que deveria. Escolha paleta com contraste, títulos curtos e fundo criado no PowerPoint se desejar; evite que a decoração prejudique a leitura. O guia menciona esses recursos, mas não exige botões ou bookmarks. **Pronto quando:** os três painéis forem legíveis e navegáveis.
-- [ ] **T19 — Testar e documentar.** Para cada página registre pergunta, visual, fontes, campos, medida, filtro e resultado esperado; compare pelo menos um total geral e uma seleção com Excel/banco. Teste nulos, zero, negativos, datas ausentes, Top N, filtros vazios e atualização. Confirme que não há duplicação por relacionamentos. **Pronto quando:** divergências estiverem resolvidas ou exibidas como limitações.
-- [ ] **T20 — Entregar para portfólio.** Salve o PBIX, inventário de tabelas, definições de medidas, decisões e capturas; documente fonte escolhida, data de referência e pendências. Se publicar no serviço, valide permissões, credenciais, atualização e requisitos de compartilhamento aplicáveis. Não inclua credenciais nem dados privados no repositório. **Pronto quando:** outra pessoa consiga entender e reproduzir o relatório com acesso autorizado às fontes.
+Formate a taxa como percentual. Em cada linha de equipe, use o `ranking_atual_automatico` como **pontuação atual do ranking**, com as casas decimais da fonte. Para Top 10, use a pontuação como valor por equipe e ordene do maior para o menor. Se nomes de exibição se repetirem, use um rótulo que identifique cada equipe pelo ID. Exiba empates de pontuação conforme a fonte e valide o critério antes de publicar uma posição ordinal. Os pontos de partidas por evento e os pontos registrados por lado têm grãos distintos e devem ser lidos separadamente.
 
-## 7. Briefing para colar em outra IA — criação visual
+## 5. Construir as páginas
 
-> Crie uma proposta visual de relatório Power BI para um projeto de análise EPT de esports, inicialmente LoL. O público quer analisar ranking atual de equipes, registros de partidas e campeonatos/colocações. Gere três páginas coerentes: (1) Ranking e equipes; (2) Partidas e desempenho; (3) Campeonatos e colocações. Opcionalmente, uma quarta página para regras de pontuação. Quero uma aparência profissional de esports, legível e acessível, com fundo escuro ou neutro, cores com bom contraste, hierarquia clara, títulos e espaço para filtros. Sugira paleta com códigos hexadecimais, tipografia, organização em grade, dimensões do fundo 16:9 e instruções para recriá-lo em PowerPoint ou no Power BI.
->
-> Para cada página, desenhe um wireframe e liste posição, título, tipo de visual, campos e medida esperada, segmentações e comportamento de interação. Página 1: ranking atual por equipe, penalidade e pontos de eventos; página 2: registros por formato, campeonato e data, vitórias/derrotas e taxa por equipe; página 3: campeonatos por tier/status e tabela de colocações. Uma página opcional pode apresentar matrizes das regras. Use cartões, barras, matriz, segmentações e Top N quando fizer sentido. Identifique visualmente espaços reservados para filtros, títulos e data de atualização. Não preencha com valores fictícios apresentados como reais.
->
-> Campos já existentes: Times (`time_id`, `nome_da_equipe`, `ranking_atual_automatico`, `ranking_base`, `penalidade_inatividade`); Campeonatos (`id_camp`, `nome_do_campeonato`, `tier`, `status`, `dat_inicio`, `dat_termino`); Colocações (`id_camp`, `placement_rank`, `team_name`); Partidas (`match_id`, `data`, `tier`, `stage`, `match_format`, `pts_time_a`, `pts_time_b`, `tournament_id`, `team_a_id`, `team_b_id`, `winner_team_id`); Pontuação por time (`time_id`, `campeonato`, `pontos_colocacao`, `pontos_partidas`). Duas tabelas de regras por tier serão exportadas depois. As medidas e a fato por equipe serão criadas e validadas por mim.
->
-> Respeite limitações: ranking é atual, não há histórico comprovado; `campeonato` na pontuação ainda é rótulo textual; equipe nas colocações ainda é texto; para vitórias de equipe em ambos os lados ainda será preparada fato por equipe; não se sabe se cada registro de partida equivale a uma série; nulos e pontos negativos são válidos; regras não são pontuação realizada. Não invente relacionamentos, KPIs, evolução ou dados. Sinalize os visuais dependentes dessas preparações e indique alternativas provisórias. O objetivo é preparar a parte visual para eu conectar às minhas próprias tabelas e medidas no Desktop.
+- [ ] **T11 — Ranking e contribuição de pontos.** Responde quem lidera a fotografia atual e quais eventos contribuíram para a pontuação de cada equipe.
 
-## Referências utilizadas
+| Visual | Campos e medidas |
+|---|---|
+| Cartão de cadastro | `[Equipes cadastradas]`, com indicação do contexto de filtro |
+| Barras horizontais Top 10 | Nome da equipe no eixo e `ranking_atual_automatico` como valor por equipe. Filtre ranking vazio |
+| Tabela de ranking | Equipe, ranking atual, ranking base e penalidade em percentual. Exiba por equipe e desabilite os totais |
+| Matriz de contribuição | Equipe → rótulo de evento nas linhas, com as duas medidas de pontos por evento. Após T05, use o nome cadastrado nos registros mapeados e preserve a identificação dos pendentes |
 
-- Notebooks em `src/extract` e `src/transform`, cinco Excels tratados, `pendencias_equipes.csv`, `README.md`, `roteiro_publicacao_pipeline_ept.txt` e `src/transform/passos/pontuacao_tier.txt`.
-- `Guia_Estudos_Colinha_Power_BI.pdf`: importação de Excel, Power Query, tipos, modelo estrela, relações 1:*, DAX básico, cartões, matriz, gráficos, filtros, Top N e interações. O guia é referência de aprendizado; suas tabelas de varejo não são dados deste projeto.
+Use segmentação de equipe na página toda e aplique o filtro de evento somente à matriz. Confira `fear_clan` na amostra local, com ranking 466,03 e penalidade de 71%. Troque o evento e confirme que apenas a contribuição por evento responde.
+
+- [ ] **T12 — Partidas e desempenho.** Responde onde e quando ocorreram os registros e como uma equipe se saiu dos dois lados.
+
+| Visual | Campos e medidas |
+|---|---|
+| Cartões | `[Registros com equipes válidas]` e, com uma equipe selecionada, `[Vitórias]`, `[Derrotas]` e `[Taxa de vitória da equipe]`. Para os cartões de vitórias e derrotas, use medidas de exibição com a mesma condição `HASONEVALUE(Times[time_id])` da taxa |
+| Série mensal | Ano-mês de `CalendarioPartidas` × `[Registros com equipes válidas]`. Exclua o mês em branco somente desse visual |
+| Barras ou matriz | Campeonato, `Partida_Equipe[match_format]` e `Partida_Equipe[stage]` × `[Registros com equipes válidas]` |
+| Tabela de detalhe | `match_id`, data, campeonato, equipe, adversário, lado, formato, fase, resultado e pontos do lado. O detalhe tem uma linha por participação |
+
+Use segmentações de equipe, campeonato, tier do campeonato, formato e período. Teste uma equipe que apareça como A e B e confirme que o cartão de partidas conta cada `match_id` uma vez. Com duas equipes selecionadas, um confronto entre elas aparece em duas linhas de detalhe e conta como um registro no cartão. Use **registros de partidas** nos títulos até confirmar na fonte se cada linha representa uma série ou outro nível de detalhe.
+
+- [ ] **T13 — Campeonatos e colocações.** Responde quais eventos existem, qual o status e quem ficou em cada posição.
+
+| Visual | Campos e medidas |
+|---|---|
+| Cartões | `[Campeonatos cadastrados]`, `[Colocações registradas]` e `[Títulos registrados]` somente após confirmar que a primeira posição representa título na origem |
+| Barras | Tier e status de `Campeonatos` × `[Campeonatos cadastrados]` |
+| Tabela de campeonatos | Nome, tier, status, início, término e link de referência |
+| Tabela de classificação | Campeonato, `placement_rank`, `team_name` e, se mapeada, equipe cadastrada. Ordene pela posição numérica |
+
+Use tier, status e campeonato para a página toda. Se houver filtro de equipe, aplique-o à classificação e aos cartões de colocações e títulos. Antes de T06, use o nome de origem somente nesses visuais. Na conferência, selecione um evento com pódio preenchido e valide manualmente as posições 1 a 3.
+
+- [ ] **T14 — Regras e conferência.** Mostre uma matriz de tier × posição e outra de tier × formato/resultado, usando o valor de pontos por combinação única. Use `SELECTEDVALUE` para exibir o valor e desabilite subtotais e totais das matrizes. Deixe as células sem regra em branco, incluindo colocações do tier D. Confira S/1º = 100, S/BO3/win = 15 e S/BO3/loss = −15. Inclua os cartões de registros na origem e sem data, além da cobertura dos dois mapeamentos (linhas vinculadas ÷ linhas totais, por tabela). Aponte a competência da carga ou a data de referência da fonte quando disponível.
+
+## 6. Validar antes de entregar
+
+- [ ] **T15 — Reconciliar amostras e filtros.** Compare cartões, totais e pelo menos uma seleção por página com as tabelas do BigQuery. Para a amostra local, `Partidas` tem 525 registros (389 BO1, 135 BO3, 1 BO5), 2 sem data e 460 sem duração. Use esses valores como referência para a mesma carga. Confira contagens antes e depois dos mapeamentos e investigue divergências sem mascarar nulos. Teste filtros vazios, múltiplas seleções, zeros e negativos.
+- [ ] **T16 — Conferir a atualização.** Atualize o relatório e valide tipos, chaves, quantidades e amostras. A carga usa `replace` por tabela e os IDs do pipeline podem mudar conforme a ordem dos dados. Atualize o Power BI depois da conclusão das sete cargas e teste se os mapas continuam apontando para as equipes e edições corretas. Prefira manter o mapa pelo nome/edição de cadastro ou por uma chave persistente da fonte e resolver os IDs na carga corrente.
+- [ ] **T17 — Salvar o PBIX e as evidências.** Documente dataset, data da carga, regras dos indicadores e cobertura dos mapeamentos. Revise títulos, unidades e **Editar interações**. Salve uma captura de cada página e do diagrama do modelo para o portfólio.
+
+Comece por T01–T04 e use os vínculos existentes para montar o ranking, a contribuição por rótulo e o catálogo com colocações. T07 libera a análise por equipe em partidas. T05 e T06 liberam os filtros integrados conforme a cobertura obtida.
